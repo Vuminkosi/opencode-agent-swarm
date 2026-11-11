@@ -39,10 +39,16 @@ import type {
   BoardPost,
   Member,
   MemberRole,
+  ModelRef,
   Swarm,
   Task,
 } from "@opencode-swarm/protocol";
 import { SwarmStore } from "../db/store.js";
+import {
+  ModelResolutionError,
+  resolveWorkerModel,
+  type ModelResolutionContext,
+} from "./model-resolver.js";
 
 /** C-HARNESS-01 subset used by activation. Satisfied structurally by the
  *  M1-03 `OpenCodeHarness` (import it, do not reimplement it). Queue-only:
@@ -119,8 +125,16 @@ export interface ActivateSwarmInput {
   readonly mode?: "parity" | "safe-coding";
   /** Native agent profile id bound to both workers (PAR-16 default: lead model). */
   readonly agentId?: string;
-  /** Model ref recorded on members; defaults to inheriting the lead model. */
+  /** Explicit per-swarm member model override (precedence 1: highest).
+   *  Malformed values fail closed (no silent fallback). */
   readonly model?: { readonly providerID: string; readonly id: string };
+  /** Verified model context reads supplied by the caller (daemon/plugin
+   *  layer) — native agent model via verified `GET /api/agent`, active
+   *  session model via verified `GET /api/session/{id}`, host default from
+   *  daemon config (host-default source is NOT VERIFIED — see
+   *  model-resolver.ts). Precedence: member override > native agent >
+   *  active session > host default. Absent entirely => fail closed. */
+  readonly modelContext?: ModelResolutionContext;
   /** Exactly two unique worker names; defaults to `worker-a`/`worker-b`. */
   readonly workerNames?: readonly string[];
 }
@@ -153,7 +167,9 @@ export interface SwarmStatusSnapshot {
 }
 
 const DEFAULT_AGENT_ID = "inherit-lead" as const;
-const DEFAULT_MODEL = { providerID: "inherit", id: "lead-model" } as const;
+/** No hardcoded production model default (MODEL-INHERIT-01): an unresolvable
+ *  worker model fails closed via the resolver instead of substituting a
+ *  placeholder. */
 const MAX_REQUIREMENT_CHARS = 4000;
 
 function fail(message: string, details: Record<string, string> = {}): never {
@@ -238,7 +254,32 @@ export class SwarmService {
 
     const mode = input.mode ?? "parity";
     const agentId = input.agentId ?? DEFAULT_AGENT_ID;
-    const model = input.model ?? { ...DEFAULT_MODEL };
+    // MODEL-INHERIT-01: resolve the worker model by production precedence
+    // (member override > native agent > active session > host default).
+    // Fail-closed: unresolvable or malformed combos throw (mapped to the
+    // service's established VALIDATION_FAILED contract) — never a
+    // placeholder, never a LIVE_* env fallback (production never reads
+    // SWARM_ALLOW_LIVE_INFERENCE / LIVE_MODEL / LIVE_MODEL_APIKey).
+    // The resolved ref is stored on the lead + workers ONCE at creation and
+    // reused verbatim by every later wake (session continuity); wakes never
+    // re-resolve. Only refs are stored — credentials stay host-resolved at
+    // execution time.
+    let model: ModelRef;
+    try {
+      model = resolveWorkerModel({
+        memberOverride: input.model,
+        nativeAgentModel: input.modelContext?.nativeAgentModel,
+        activeSessionModel: input.modelContext?.activeSessionModel,
+        hostDefaultModel: input.modelContext?.hostDefaultModel,
+      }).model;
+    } catch (err) {
+      if (err instanceof ModelResolutionError) {
+        fail(`Unresolvable worker model (${err.code}): ${err.message}`, {
+          code: err.code,
+        });
+      }
+      throw err;
+    }
 
     // Lead write restriction, enforced in code (role policy) and at the
     // session tool layer (deny rules) — never by prompt text alone.

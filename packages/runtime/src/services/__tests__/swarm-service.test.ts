@@ -64,6 +64,10 @@ function setup(): { store: SwarmStore; harness: FakeHarness; service: SwarmServi
   return { store, harness, service: new SwarmService(store, harness) };
 }
 
+/** Fail-closed resolver fixture: every successful activation supplies an
+ *  explicit active-session model (MODEL-INHERIT-01). */
+const ACTIVE_MODEL = { providerID: "prov-active", id: "model-active" } as const;
+
 describe("activation validation", () => {
   test("empty requirement is rejected", () => {
     expect(() => validateRequirement("   ")).toThrow(ProtocolError);
@@ -98,6 +102,7 @@ describe("activation creates swarm + lead + 2 workers + briefs", () => {
         requirement: "Add tests to two independent fixture modules",
         coordinatorSessionId: "sess-lead",
         projectRoot: "/tmp/m104",
+        modelContext: { activeSessionModel: ACTIVE_MODEL },
       });
 
       expect(result.workers.length).toBe(2);
@@ -142,6 +147,7 @@ describe("activation creates swarm + lead + 2 workers + briefs", () => {
         requirement: "Add tests to two independent fixture modules",
         coordinatorSessionId: "sess-lead",
         projectRoot: "/tmp/m104",
+        modelContext: { activeSessionModel: ACTIVE_MODEL },
       });
       const before = store.getPostsAfter(result.swarm.id, 0);
       const dupe = store.appendPost(result.swarm.id, {
@@ -178,6 +184,7 @@ describe("lead write restriction (role policy + tool auth, not prompt-only)", ()
         requirement: "Add tests to two independent fixture modules",
         coordinatorSessionId: "sess-lead",
         projectRoot: "/tmp/m104",
+        modelContext: { activeSessionModel: ACTIVE_MODEL },
       });
       const leadRules = harness.appliedRules.find((r) => r.sessionId === "sess-lead");
       expect(leadRules).toBeDefined();
@@ -199,6 +206,7 @@ describe("zero-token status", () => {
         requirement: "Add tests to two independent fixture modules",
         coordinatorSessionId: "sess-lead",
         projectRoot: "/tmp/m104",
+        modelContext: { activeSessionModel: ACTIVE_MODEL },
       });
       const submittedBefore = harness.submitted.length;
       const appliedBefore = harness.appliedRules.length;
