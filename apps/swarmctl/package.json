@@ -1,0 +1,14 @@
+{
+  "name": "@opencode-swarm/swarmctl",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "M1-02 Bun CLI: zero-token status via daemon /healthz + snapshot (no model inference).",
+  "bin": {
+    "swarmctl": "./src/status.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "status": "bun src/status.ts"
+  }
+}
