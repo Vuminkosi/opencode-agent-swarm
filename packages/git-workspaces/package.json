@@ -1,0 +1,23 @@
+{
+  "name": "@opencode-swarm/git-workspaces",
+  "version": "0.1.0",
+  "private": true,
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "files": ["src"],
+  "type": "module",
+  "description": "M4-01 task-scoped Git worktrees: exclusive ownership, canonical protection, Windows-safe lifecycle. Bun git-CLI worktrees only.",
+  "exports": {
+    ".": "./src/worktree-manager.ts",
+    "./path-policy": "./src/path-policy.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "bun-types": "1.4.4"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

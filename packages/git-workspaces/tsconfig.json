@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "src",
+    // NOTE (M4-01): type-only reuse of the sibling-resolved typings.
+    // This package declares the same devDependencies as runtime, but a
+    // parallel worker must not run a shared `bun install` (bun.lock is a
+    // shared resource owned by the orchestrator). Until the orchestrator
+    // installs, resolve @types/node + bun-types read-only from the
+    // already-installed runtime workspace. No runtime code is imported.
+    "typeRoots": ["../runtime/node_modules/@types", "../runtime/node_modules"],
+    "types": ["node", "bun-types"]
+  },
+  "include": ["src/**/*.ts"]
+}
