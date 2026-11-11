@@ -1,0 +1,28 @@
+-- M1-01 migration 002: normalized wake-dedupe key (spec §6 caveat). UP-ONLY.
+--
+-- SQLite treats NULLs as distinct in UNIQUE constraints, so the 001
+-- composite UNIQUE(member_id, member_generation, reason, post_sequence,
+-- task_id) cannot dedupe intents where post_sequence/task_id are NULL
+-- (e.g. two `assigned_task` intents for the same member+task collapse
+-- only if both columns are non-null). The normalized non-null
+-- `delivery_key` closes that hole:
+--   delivery_key = sha256hex(memberId|generation|reason|postSeqOr0|taskIdOr0|payloadHash)
+-- computed by the store (shared with unit tests).
+--
+-- This file is intentionally PHASE 1 ONLY (ADD COLUMN). SQLite has no
+-- sha256() function, so phases 2-4 run in store.ts `applyMigrationV2`
+-- inside the SAME BEGIN IMMEDIATE transaction, in order:
+--   phase 2: backfill delivery_key for pre-002 rows in JS;
+--   phase 3: deterministic cleanup — duplicate (swarm_id, delivery_key)
+--            groups keep the earliest (created_at, id) row, rest deleted
+--            and logged (console.warn with ids);
+--   phase 4: CREATE UNIQUE INDEX ix_wake_delivery_key.
+-- Creating the index BEFORE the backfill/cleanup (the old layout of this
+-- file) fails on pre-002 NULL-era duplicates, ROLLBACKs, never records
+-- version 2, and every reopen fails again. Never reorder.
+-- Evidence: [DESIGN] (spec §6 "Idempotency caveat"); R1 remediation.
+--
+-- Rollback: migrations are up-only (see docs/recovery-runbook.md).
+-- There is no DOWN for 002; restore from a pre-migration backup instead.
+
+ALTER TABLE wake_intents ADD COLUMN delivery_key TEXT;

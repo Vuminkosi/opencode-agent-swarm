@@ -1,0 +1,21 @@
+{
+  "name": "@opencode-swarm/runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "M1-01 durable SQLite journal: migrations + atomic store (spec §§6,7). Bun daemon runtime.",
+  "exports": {
+    "./db/store": "./src/db/store.ts"
+  },
+  "dependencies": {
+    "@opencode-swarm/protocol": "workspace:*",
+    "zod": "3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "bun-types": "1.4.4"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}
