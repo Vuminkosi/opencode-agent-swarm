@@ -127,3 +127,54 @@ Generation rule: **v2 `@opencode/*` only — never `@opencode-ai/*`** per spec �
 - Root `package.json` — `typecheck` / `probes` scripts, TypeScript 5.9.2 devDependency. [DESIGN]
 
 Relative links in this report were validated by inspection of the paths above (no execution). No unexecuted command example is included; where commands are named (`bunx opencode-swarm board`, probe scripts), they are cited as contract fallback/scope references, not as executed procedures. [DESIGN]
+
+## 7. M2 wake-engine compatibility addendum (DOC-M2-01)
+
+> **Document status for this section only: APPROVED CONTRACT + IMPLEMENTED
+> (FakeHarness simulations) / COMMITTED at `c62c824`.** Live-server and
+> live-inference behavior remain **NOT VERIFIED**. §§1–6 above are unchanged
+> M0 baseline; nothing below rewrites them. [DESIGN]
+
+- **Baseline:** HEAD `c62c82418f93a923325968ea841b18f81d182c46` —
+  `feat(runtime): durable wake-up engine (M2-01)`; 7 files, 2703 insertions.
+  Prior: `56d22a2` (M0) → … → `d22d8c1` (workflow, Node24). [PROBE]
+- **Constraint compliance:** M0/M1 files untouched; no 003 migration
+  (`delivery_key` UNIQUE rides on migration 002 + store backfill); protocol
+  DTOs untouched. [DESIGN]
+- **Evidence:** 20 wake tests + 98-test runtime suite PASS (FakeHarness),
+  typecheck clean — see [m2-wake-engine evidence](evidence/m2-wake-engine.md)
+  §§7/9 for the full test map and reproducible commands. [PROBE]
+
+### 7.1 Adapter / dispatcher / harness compatibility
+
+| Surface | Status in M2 |
+|---|---|
+| Frozen adapter port (`packages/adapter-opencode/src/port.ts`) | Unchanged by M2-01; dispatcher depends only on the narrow `DispatchHarness` surface (`submitTurn` queue-only + `getSession`), satisfied structurally by the M1-03 `OpenCodeHarness`. Contract-stable. [DESIGN] — IMPLEMENTED |
+| Dispatcher transport posture | Queue-only turns, adapter-internal `externalId` (never an OpenCode API argument), at-least-once transport with idempotent acks. No new native API surface assumed. [DESIGN] — IMPLEMENTED |
+| Harness error-shape handling | `isQuotaError` (402 / quota / 402-code) vs `isTransientError` (429/408/502/503/504/5xx/timeout) vs permanent-4xx classification is code-present and FakeHarness-tested. Whether the live provider/harness surfaces quota **exactly** in this shape is F-04 below. [DESIGN] — IMPLEMENTED, live shape NOT VERIFIED |
+| Member-state / generation guards | `killed`, `quota_paused`, `approval_paused`, paused-swarm, terminal-swarm, generation-drift guards enforced store-side + dispatcher-side; S2-1/S2-2/F-01 fix-review hardening committed. [DESIGN] — IMPLEMENTED |
+| Live probes 01–12 | Still NOT VERIFIED — no `probe-NN.log` exists in the repo. M2 simulations do not close any live probe. [PROBE] |
+
+### 7.2 F-04: harness 402-shape — NOT VERIFIED
+
+**F-04 (harness 402-shape): NOT VERIFIED.** [PROBE] The dispatcher's quota
+branch triggers on `status === 402` (or quota/402-coded errors), and the
+FakeHarness 402 simulations pass — but the exact error object the M1-03
+`OpenCodeHarness` produces against a **live provider on quota exhaustion**
+(status field? code string? message wording? paid-path side effects before
+the error surfaces?) has no live log in this repo. Until a live 402 is
+captured in a disposable probe run, the 402-detection regex is a
+**contract assumption tested against fakes**, and provider-side 402 shaping
+plus zero-spend-on-402 remain assignment-supplied claims (LIVE-PROBE-01),
+not repo evidence. Resumption: run a quota-path probe against the pinned
+toolchain, capture the raw error shape, and reconcile `isQuotaError` with
+the observation before any paid-path autonomy claim. [PROBE]
+
+### 7.3 M2 gaps and NOT VERIFIED list (additive to §5)
+
+1. Live turns, overlapping-execution overlap figures, and provider 402
+   shaping are NOT VERIFIED (no live server, no inference spend). [PROBE]
+2. Exactly-once physical delivery is not claimed; ambiguous
+   admitted-but-unacked wakes quarantine for operator review by design. [DESIGN]
+3. No live-server, screenshot, deployment, endpoint, CLI-flag, release, or
+   support-promise claims are made in this addendum. [DESIGN]
