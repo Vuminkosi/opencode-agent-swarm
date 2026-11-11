@@ -2,6 +2,10 @@
   "name": "@opencode-swarm/adapter-opencode",
   "version": "0.0.1",
   "private": true,
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "files": ["src"],
   "type": "module",
   "description": "Frozen OpenCode harness adapter port (C-HARNESS-01). Dependency-free TypeScript interfaces only.",
   "main": "./src/port.ts",

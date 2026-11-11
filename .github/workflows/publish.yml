@@ -1,0 +1,129 @@
+# Release publish — build, verify, and publish to GitHub Packages (npm).
+#
+# Pipeline: GitHub Release "published" (or manual dispatch) -> verify job
+# (Bun install, tsc x4, scoped bun test, no live inference) -> publish job
+# (npm publish --provenance to https://npm.pkg.github.com, private pkgs skipped).
+#
+# Secrets: publishes with NODE_AUTH_TOKEN=${{ secrets.GITHUB_TOKEN }} only.
+# The token is never echoed (no `set -x`, no `env` dumps). See docs/publishing.md.
+# Provenance (Sigstore/OIDC) needs `id-token: write` on the publish job. [DESIGN:
+# npm provenance attestation against the GitHub Packages npm registry is
+# asserted by requirement DEVOPS-PUBLISH-01 AC(3); if the registry ever rejects
+# the attestation, remove `--provenance` and re-run — verification still gates.]
+#
+# Scope note: packages are `@opencode-swarm/*`. The npm scope SHOULD match the
+# repository owner for GitHub Packages linking; if the owner differs, rename the
+# scope (and the @opencode-swarm:registry line below) before cutting a release.
+
+name: publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+# Least privilege at workflow level; the publish job elevates only what it needs.
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: verify (install, typecheck, test)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun 1.4.4
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Setup Node 24 (npm compat)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck (all 4 package tsconfigs)
+        run: |
+          bunx tsc --noEmit -p packages/protocol/tsconfig.json
+          bunx tsc --noEmit -p packages/runtime/tsconfig.json
+          bunx tsc --noEmit -p packages/adapter-opencode/tsconfig.json
+          bunx tsc --noEmit -p packages/plugin/tsconfig.json
+
+      # Scoped suite = FINAL-POSTCOMMIT-01 list. bun:test only; no live
+      # inference, no network, no paid resources (e2e uses fake harness +
+      # disposable mkdtemp DBs).
+      - name: Test (scoped, no live inference)
+        run: |
+          bun test packages/plugin/src/index.test.ts
+          bun test packages/protocol/src/__tests__/ packages/runtime/src/db/__tests__/
+          bun test packages/runtime/src/services/__tests__/daemon.test.ts
+          bun test packages/runtime/src/config.test.ts
+          bun test packages/adapter-opencode/src/__tests__/bridge.test.ts
+          bun test packages/runtime/src/services/__tests__/swarm-service.test.ts
+          bun test packages/plugin/src/commands/__tests__/swarm-command.test.ts
+          bun test examples/two-module-fixture/
+          bun test tests/e2e/
+
+  publish:
+    name: publish to GitHub Packages
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # npm --provenance (Sigstore/OIDC)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun 1.4.4
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Setup Node 24 (npm compat)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      # Writes $HOME/.npmrc with a literal ${NODE_AUTH_TOKEN} reference so the
+      # secret stays in the environment and is never written to disk or logs.
+      - name: Configure GitHub Packages registry (no secret on disk)
+        run: |
+          printf '%s\n' '@opencode-swarm:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$HOME/.npmrc"
+
+      # Publishes each workspace package whose package.json is NOT private.
+      # Currently all five are "private": true, so every package is SKIPPED
+      # until a maintainer flips a package to public (see docs/publishing.md).
+      # Exit code propagates: any real `npm publish` failure fails the job.
+      - name: Publish public packages (private packages skipped)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          fail=0
+          for PKG in packages/protocol packages/runtime packages/adapter-opencode packages/plugin apps/swarmctl; do
+            if [ ! -f "$PKG/package.json" ]; then
+              echo "skip $PKG: no package.json"
+              continue
+            fi
+            PRIVATE=$(node -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync('$PKG/package.json','utf8'));console.log(p.private===true?'true':'false')")
+            if [ "$PRIVATE" = "true" ]; then
+              echo "skip $PKG: private=true"
+              continue
+            fi
+            echo "publish $PKG"
+            (cd "$PKG" && npm publish --provenance) || fail=1
+          done
+          exit $fail

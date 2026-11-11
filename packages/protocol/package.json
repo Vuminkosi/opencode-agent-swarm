@@ -2,6 +2,10 @@
   "name": "@opencode-swarm/protocol",
   "version": "0.1.0",
   "private": true,
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "files": ["src"],
   "type": "module",
   "description": "M1-01 versioned wire protocol: Zod-single-source schemas for Swarm/Member/Task/BoardPost/WakeIntent/VerificationEvidence (spec §5).",
   "exports": {

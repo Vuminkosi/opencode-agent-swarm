@@ -2,6 +2,10 @@
   "name": "@opencode-swarm/runtime",
   "version": "0.1.0",
   "private": true,
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "files": ["src"],
   "type": "module",
   "description": "M1-01 durable SQLite journal: migrations + atomic store (spec §§6,7). Bun daemon runtime.",
   "exports": {
