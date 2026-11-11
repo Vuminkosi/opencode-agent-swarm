@@ -242,6 +242,73 @@ function parseJsonArray(raw: string, what: string): string[] {
   return parsed;
 }
 
+/**
+ * M2 wake-engine tuning + pure backoff math (module scope so the queue,
+ * dispatcher and reconciler share one deterministic formula with the
+ * store gate — no duplicated business rules).
+ */
+export const WAKE_LEASE_TTL_MS_DEFAULT = 60_000 as const;
+export const WAKE_QUARANTINE_TTL_MS: number = 24 * 3600 * 1000;
+export const WAKE_BACKOFF_BASE_MS_DEFAULT = 250 as const;
+export const WAKE_BACKOFF_CAP_MS_DEFAULT = 10_000 as const;
+export const WAKE_MAX_ATTEMPTS_DEFAULT = 8 as const;
+
+/** Member states the dispatcher may admit a turn for (spec §7.1). */
+export const WAKE_ELIGIBLE_MEMBER_STATES = ["starting", "working", "waiting", "recovering"] as const;
+
+/**
+ * Bounded exponential backoff with full jitter for TRANSIENT transport
+ * failures only: delay = rand * min(cap, base * 2^attempts). Pure and
+ * injectable (pass rand + attempts explicitly) for deterministic tests.
+ */
+export function wakeBackoffDelayMs(
+  attempts: number,
+  baseMs: number = WAKE_BACKOFF_BASE_MS_DEFAULT,
+  capMs: number = WAKE_BACKOFF_CAP_MS_DEFAULT,
+  rand: () => number = Math.random,
+): number {
+  const n = Math.max(0, Math.floor(attempts));
+  const exp = Math.min(capMs, baseMs * 2 ** Math.min(n, 20));
+  const r = rand();
+  const jitter = r >= 0 && r <= 1 ? r : 0.5;
+  return Math.floor(jitter * exp);
+}
+
+/**
+ * Deterministic dispatch gate ceiling: updated_at + max possible backoff
+ * (jitter = 1). A restarted dispatcher waits the ceiling, never less —
+ * bounded, storm-free, and reproducible without the original roll.
+ */
+export function wakeNotBeforeMs(
+  updatedAtIso: string,
+  attempts: number,
+  baseMs: number = WAKE_BACKOFF_BASE_MS_DEFAULT,
+  capMs: number = WAKE_BACKOFF_CAP_MS_DEFAULT,
+  nowMs: number = Date.now(),
+): number {
+  if (attempts <= 0) return 0;
+  const updated = Date.parse(updatedAtIso);
+  const base = Number.isFinite(updated) ? (updated as number) : nowMs;
+  const n = Math.max(0, Math.floor(attempts));
+  const ceiling = Math.min(capMs, baseMs * 2 ** Math.min(n, 20));
+  return base + ceiling;
+}
+
+/** Fenced-claim outcome for exactly one dispatch attempt (M2). */
+export type WakeDispatchClaim =
+  | {
+      readonly status: "admitted";
+      readonly intent: WakeIntent;
+      readonly fencingToken: number;
+      readonly leaseExpiresAt: string;
+      readonly correlationId: string;
+    }
+  | { readonly status: "deferred-live-turn"; readonly intent: WakeIntent }
+  | { readonly status: "deferred-stale"; readonly intent: WakeIntent }
+  | { readonly status: "deferred-ineligible"; readonly intent: WakeIntent }
+  | { readonly status: "deferred-backoff"; readonly intent: WakeIntent }
+  | { readonly status: "deferred-quarantined"; readonly intent: WakeIntent };
+
 export class SwarmStore {
   private readonly db: Database;
   private closed = false;
@@ -1167,6 +1234,24 @@ export class SwarmStore {
       .map((r) => this.toWake(r));
   }
 
+  // --- M2 wake engine (contract C-DB-01 extension; spec §§7, 8 M2) ---
+  //
+  // Durable exactly-once-logical wake queue on top of the M1-01 journal.
+  // No schema change (no 003 migration): delivery_key UNIQUE (002) gives
+  // one persisted logical action per (member|generation|reason|post|task|
+  // payloadHash); the M1 `leases` table provides fencing tokens + TTLs for
+  // member-turn serialization and quarantine markers; `outbox` carries the
+  // persistent lifecycle records. Transport stays at-least-once — receipts
+  // and acks are admission proof, never execution proof (spec §8 crash
+  // window). Daemon owns durability; the harness owns backend mapping.
+  //
+  // Transition discipline: every mutation below runs inside ONE BEGIN
+  // IMMEDIATE txn and honors protocol assertWakeTransition /
+  // assertMemberTransition — never invents an edge (e.g. there is NO
+  // admitted->queued edge, so transient submit failures keep their state,
+  // bump attempts, release the member lease and schedule a bounded retry;
+  // only the reconciler re-drives them after verifying the session is idle).
+
   /**
    * Claim a queued intent for dispatch (one live turn per member).
    * - stale (killed / generation drift) -> cancelled + deferred-stale.
@@ -1230,6 +1315,711 @@ export class SwarmStore {
       if (updated === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
       return this.toWake(updated);
     });
+  }
+
+  // --- M2 wake engine: lease/ack/retry/backoff/quota (spec §§7, 8 M2) ---
+  //
+  // All methods below operate ONLY on wake_intents + members + leases +
+  // outbox (no other tables, no schema change). Each mutating method runs
+  // in ONE BEGIN IMMEDIATE txn and appends an outbox lifecycle record in
+  // the SAME txn (atomic commit: state change and its record land or
+  // neither does — the persistent lifecycle trail).
+  //
+  // Fencing: `leases` row `member-turn:{memberId}` = {holder: wakeId,
+  // fencing_token: monotonic, expires_at}. Exactly one holder per member;
+  // ack/complete validate the token when supplied. Quarantine markers use
+  // `wake-quarantine:{wakeId}` rows (holder "quarantine", 24h TTL) so an
+  // ambiguous wake can never be auto-redispatched (never blind replay).
+  //
+  // Backoff: attempts-driven bounded exponential backoff with jitter for
+  // TRANSIENT transport failures only (429/5xx/network/timeout). Quota
+  // (402) NEVER schedules a retry — it quota-pauses the member. The gate
+  // is deterministic: dispatchers skip wakes whose
+  // updated_at + ceiling(attempts) is in the future.
+
+  /** Member states that may receive a dispatched turn (spec §7.1). */
+  // (Exported constants live at module scope below the class.)
+
+  private leaseKeyForMember(memberId: string): string {
+    return `member-turn:${memberId}`;
+  }
+
+  private quarantineKeyForWake(wakeId: string): string {
+    return `wake-quarantine:${wakeId}`;
+  }
+
+  private readLease(resourceKey: string): { holder: string; fencingToken: number; expiresAt: string } | null {
+    const row = this.db
+      .query<{ resource_key: string; holder: string; fencing_token: number; expires_at: string }, [string]>(
+        "SELECT resource_key, holder, fencing_token, expires_at FROM leases WHERE resource_key = ?",
+      )
+      .get(resourceKey);
+    if (row === null) return null;
+    return { holder: row.holder, fencingToken: row.fencing_token, expiresAt: row.expires_at };
+  }
+
+  private writeLease(resourceKey: string, holder: string, now: string, ttlMs: number): { fencingToken: number; expiresAt: string } {
+    const existing = this.readLease(resourceKey);
+    const fencingToken = (existing?.fencingToken ?? 0) + 1;
+    const expiresAt = new Date(Date.parse(now) + ttlMs).toISOString();
+    this.db
+      .query<[], [string, string, number, string]>(
+        "INSERT OR REPLACE INTO leases (resource_key, holder, fencing_token, expires_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(resourceKey, holder, fencingToken, expiresAt);
+    return { fencingToken, expiresAt };
+  }
+
+  private deleteLease(resourceKey: string, holder: string): boolean {
+    const outcome = this.db
+      .query<unknown, [string, string]>("DELETE FROM leases WHERE resource_key = ? AND holder = ?")
+      .run(resourceKey, holder) as unknown as { changes?: number };
+    return (outcome?.changes ?? 0) > 0;
+  }
+
+  private leaseLive(lease: { expiresAt: string } | null, now: string): boolean {
+    return lease !== null && lease.expiresAt > now;
+  }
+
+  private wakeLifecycleEvent(kind: string, aggregateId: string, payload: Record<string, string>): void {
+    this.enqueueOutbox(kind, aggregateId, payload);
+  }
+
+  /**
+   * M2 fenced claim: like claimWakeIntent but with a fencing-token lease,
+   * member activation (waiting/starting/recovering -> working, spec §7.1:
+   * "Waiting -> Working: durable mention/assignment admitted"), backoff
+   * gating, quarantine and ineligible-state guards. All in ONE txn.
+   */
+  claimWakeForDispatch(
+    id: string,
+    opts?: { readonly leaseTtlMs?: number; readonly correlationId?: string; readonly nowIso?: string; readonly baseMs?: number; readonly capMs?: number },
+  ): WakeDispatchClaim {
+    const leaseTtlMs = opts?.leaseTtlMs ?? WAKE_LEASE_TTL_MS_DEFAULT;
+    const correlationId = opts?.correlationId ?? crypto.randomUUID();
+    const baseMs = opts?.baseMs ?? WAKE_BACKOFF_BASE_MS_DEFAULT;
+    const capMs = opts?.capMs ?? WAKE_BACKOFF_CAP_MS_DEFAULT;
+    return this.txn(() => {
+      const now = opts?.nowIso ?? nowIso();
+      const row = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+      if (row === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+      // S2-2 in-txn paused-swarm guard: the dispatcher's volatile
+      // pre-check races lifecycle transitions, so the authoritative swarm
+      // status is re-read HERE inside the claim txn. Paused/terminal never
+      // admits, activates, or leases — the wake stays queued for resume.
+      const swarmStatus = this.requireSwarm(row.swarm_id).status;
+      if (
+        swarmStatus === "paused" ||
+        swarmStatus === "completing" ||
+        swarmStatus === "completed" ||
+        swarmStatus === "failed" ||
+        swarmStatus === "cancelled"
+      ) {
+        this.wakeLifecycleEvent("wake_deferred", id, {
+          wakeId: id, memberId: row.member_id, correlationId, reason: `swarm-${swarmStatus}`,
+        });
+        return { status: "deferred-ineligible", intent: this.toWake(row) };
+      }
+      if (row.state !== "queued") {
+        const live = this.db
+          .query<{ id: string }, [string]>(
+            "SELECT id FROM wake_intents WHERE member_id = ? AND state IN ('admitted','observed_running') LIMIT 1",
+          )
+          .get(row.member_id);
+        if (live !== null) {
+          const current = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+          if (current === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+          return { status: "deferred-live-turn", intent: this.toWake(current) };
+        }
+        throw new ProtocolError("INVALID_TRANSITION", `Wake ${id} is ${row.state}, not queued`, { wakeId: id });
+      }
+      const member = this.requireMember(row.member_id);
+      if (member.internal_state === "killed" || member.generation !== row.member_generation) {
+        this.db
+          .query<[], [string, string]>("UPDATE wake_intents SET state = 'cancelled', updated_at = ? WHERE id = ?")
+          .run(now, id);
+        this.wakeLifecycleEvent("wake_cancelled_stale", id, {
+          wakeId: id, memberId: row.member_id, correlationId, reason: "stale-generation-or-killed",
+        });
+        const updated = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+        if (updated === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+        return { status: "deferred-stale", intent: this.toWake(updated) };
+      }
+      if (
+        member.internal_state === "quota_paused" ||
+        member.internal_state === "approval_paused"
+      ) {
+        this.wakeLifecycleEvent("wake_deferred", id, {
+          wakeId: id, memberId: row.member_id, correlationId, reason: `ineligible-member-state:${member.internal_state}`,
+        });
+        return { status: "deferred-ineligible", intent: this.toWake(row) };
+      }
+      // Backoff gate: a transiently-failed wake is not claimable until its
+      // deterministic ceiling elapses. No attempts bump here (no storm).
+      if (row.attempts > 0 && wakeNotBeforeMs(row.updated_at, row.attempts, baseMs, capMs, Date.parse(now)) > Date.parse(now)) {
+        this.wakeLifecycleEvent("wake_deferred", id, {
+          wakeId: id, memberId: row.member_id, correlationId, reason: "backoff-pending",
+        });
+        return { status: "deferred-backoff", intent: this.toWake(row) };
+      }
+      const live = this.db
+        .query<{ id: string }, [string]>(
+          "SELECT id FROM wake_intents WHERE member_id = ? AND state IN ('admitted','observed_running') LIMIT 1",
+        )
+        .get(row.member_id);
+      if (live !== null) {
+        // Coalesce behind the live turn: no attempts bump (a deferral is
+        // not a failure), just a durable outbox note + the queued row.
+        this.wakeLifecycleEvent("wake_deferred", id, {
+          wakeId: id, memberId: row.member_id, correlationId, reason: "live-turn-active",
+        });
+        return { status: "deferred-live-turn", intent: this.toWake(row) };
+      }
+      // Quarantine marker: ambiguous wakes never auto-dispatch.
+      const quarantine = this.readLease(this.quarantineKeyForWake(id));
+      if (this.leaseLive(quarantine, now)) {
+        this.wakeLifecycleEvent("wake_deferred", id, {
+          wakeId: id, memberId: row.member_id, correlationId, reason: "quarantined",
+        });
+        return { status: "deferred-quarantined", intent: this.toWake(row) };
+      }
+      // Member-turn lease: exactly one holder per member (one live turn).
+      const memberLease = this.readLease(this.leaseKeyForMember(row.member_id));
+      if (this.leaseLive(memberLease, now) && memberLease !== null && memberLease.holder !== id) {
+        this.wakeLifecycleEvent("wake_deferred", id, {
+          wakeId: id, memberId: row.member_id, correlationId, reason: `lease-held-by:${memberLease.holder}`,
+        });
+        return { status: "deferred-live-turn", intent: this.toWake(row) };
+      }
+      // Activate the member (spec §7.1 Waiting -> Working on admission).
+      const internal = member.internal_state;
+      if (internal === "waiting" || internal === "starting" || internal === "recovering") {
+        assertMemberTransition(internal, "working");
+        this.db
+          .query<[], [string, string, string]>(
+            "UPDATE members SET internal_state = 'working', public_state = ?, last_activity_at = ? WHERE id = ?",
+          )
+          .run(projectPublicState("working"), now, member.id);
+      }
+      const lease = this.writeLease(this.leaseKeyForMember(row.member_id), id, now, leaseTtlMs);
+      this.db
+        .query<[], [string, string]>(
+          "UPDATE wake_intents SET state = 'admitted', attempts = attempts + 1, updated_at = ? WHERE id = ?",
+        )
+        .run(now, id);
+      this.wakeLifecycleEvent("wake_admitted", id, {
+        wakeId: id,
+        memberId: row.member_id,
+        correlationId,
+        fencingToken: String(lease.fencingToken),
+        leaseExpiresAt: lease.expiresAt,
+      });
+      const updated = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+      if (updated === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+      return {
+        status: "admitted",
+        intent: this.toWake(updated),
+        fencingToken: lease.fencingToken,
+        leaseExpiresAt: lease.expiresAt,
+        correlationId,
+      };
+    });
+  }
+
+  /**
+   * Ack a successfully admitted turn as observed-running. Idempotent:
+   * double-ack (at-least-once transport redelivery) returns the current
+   * row when already observed_running. Fencing token is enforced when a
+   * live member lease names a different holder.
+   */
+  ackWakeObservedRunning(id: string, fencingToken?: number): WakeIntent {
+    return this.txn(() => {
+      const now = nowIso();
+      const row = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+      if (row === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+      if (row.state === "observed_running") {
+        this.assertWakeFencing(row.member_id, id, fencingToken);
+        return this.toWake(row);
+      }
+      assertWakeTransition(row.state as WakeState, "observed_running");
+      this.assertWakeFencing(row.member_id, id, fencingToken);
+      this.db
+        .query<[], [string, string]>("UPDATE wake_intents SET state = 'observed_running', updated_at = ? WHERE id = ?")
+        .run(now, id);
+      this.wakeLifecycleEvent("wake_observed_running", id, { wakeId: id, memberId: row.member_id });
+      const updated = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+      if (updated === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+      return this.toWake(updated);
+    });
+  }
+
+  /**
+   * Complete a wake (succeeded | failed | cancelled). `admitted ->
+   * succeeded` chains through observed_running inside the same txn (the
+   * direct edge does not exist; the two-step path is recorded in the
+   * outbox payload). Releases the member lease when this wake holds it.
+   */
+  completeWake(
+    id: string,
+    outcome: "succeeded" | "failed" | "cancelled",
+    fencingToken?: number,
+    correlationId?: string,
+  ): WakeIntent {
+    return this.txn(() => {
+      const now = nowIso();
+      const cid = correlationId ?? crypto.randomUUID();
+      const row = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+      if (row === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+      if (row.state === outcome) return this.toWake(row);
+      this.assertWakeFencing(row.member_id, id, fencingToken);
+      let from = row.state as WakeState;
+      if (from === "admitted" && outcome === "succeeded") {
+        assertWakeTransition("admitted", "observed_running");
+        this.db
+          .query<[], [string, string]>("UPDATE wake_intents SET state = 'observed_running', updated_at = ? WHERE id = ?")
+          .run(now, id);
+        from = "observed_running";
+      }
+      assertWakeTransition(from, outcome);
+      this.db
+        .query<[], [string, string, string]>("UPDATE wake_intents SET state = ?, updated_at = ? WHERE id = ?")
+        .run(outcome, now, id);
+      this.deleteLease(this.leaseKeyForMember(row.member_id), id);
+      this.wakeLifecycleEvent("wake_completed", id, {
+        wakeId: id, memberId: row.member_id, correlationId: cid, outcome, via: from === row.state ? from : `${row.state}->${from}`,
+      });
+      const updated = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+      if (updated === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+      return this.toWake(updated);
+    });
+  }
+
+  /**
+   * Record a TRANSIENT transport failure (429/5xx/network/timeout — never
+   * quota). Keeps the current state (no admitted->queued edge exists),
+   * bumps attempts, releases the member lease, and schedules a bounded
+   * exp-backoff retry. Past maxAttempts the wake is terminally closed
+   * (admitted -> failed; queued -> cancelled) instead of retried forever.
+   */
+  failWakeTransient(
+    id: string,
+    opts?: {
+      readonly fencingToken?: number;
+      readonly correlationId?: string;
+      readonly baseMs?: number;
+      readonly capMs?: number;
+      readonly maxAttempts?: number;
+      readonly rand?: () => number;
+      readonly nowIso?: string;
+    },
+  ): { readonly intent: WakeIntent; readonly scheduled: boolean; readonly exhausted: boolean; readonly notBefore: string; readonly attempts: number; readonly correlationId: string } {
+    const baseMs = opts?.baseMs ?? WAKE_BACKOFF_BASE_MS_DEFAULT;
+    const capMs = opts?.capMs ?? WAKE_BACKOFF_CAP_MS_DEFAULT;
+    const maxAttempts = opts?.maxAttempts ?? WAKE_MAX_ATTEMPTS_DEFAULT;
+    const rand = opts?.rand ?? Math.random;
+    const cid = opts?.correlationId ?? crypto.randomUUID();
+    return this.txn(() => {
+      const now = opts?.nowIso ?? nowIso();
+      const row = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+      if (row === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+      if (row.state !== "queued" && row.state !== "admitted") {
+        throw new ProtocolError("INVALID_TRANSITION", `Transient retry needs queued/admitted, not ${row.state}`, { wakeId: id });
+      }
+      this.assertWakeFencing(row.member_id, id, opts?.fencingToken);
+      const attempts = row.attempts + 1;
+      const delayMs = wakeBackoffDelayMs(attempts, baseMs, capMs, rand);
+      const notBefore = new Date(Date.parse(now) + delayMs).toISOString();
+      this.deleteLease(this.leaseKeyForMember(row.member_id), id);
+      if (attempts >= maxAttempts) {
+        // Bounded retries exhausted: close terminally, never loop forever.
+        const terminal = row.state === "admitted" ? "failed" : "cancelled";
+        assertWakeTransition(row.state as WakeState, terminal);
+        this.db
+          .query<[], [string, number, string, string]>("UPDATE wake_intents SET state = ?, attempts = ?, updated_at = ? WHERE id = ?")
+          .run(terminal, attempts, now, id);
+        this.wakeLifecycleEvent("wake_completed", id, {
+          wakeId: id, memberId: row.member_id, correlationId: cid, outcome: terminal, reason: "retry-budget-exhausted",
+        });
+        const updated = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+        if (updated === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+        return { intent: this.toWake(updated), scheduled: false, exhausted: true, notBefore, attempts, correlationId: cid };
+      }
+      this.db
+        .query<[], [number, string, string]>("UPDATE wake_intents SET attempts = ?, updated_at = ? WHERE id = ?")
+        .run(attempts, now, id);
+      this.wakeLifecycleEvent("wake_retry_scheduled", id, {
+        wakeId: id, memberId: row.member_id, correlationId: cid, attempts: String(attempts), notBefore, delayMs: String(delayMs),
+      });
+      const updated = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+      if (updated === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+      return { intent: this.toWake(updated), scheduled: true, exhausted: false, notBefore, attempts, correlationId: cid };
+    });
+  }
+
+  /**
+   * F-01 non-budget deferral for pre-transport checks (live session, snapshot
+   * unavailable, already-terminal externalId): releases the member-turn lease
+   * WITHOUT bumping attempts, touching updated_at, or changing wake state,
+   * and returns the deterministic notBefore gate. A deferral is not a
+   * failure — retry budget is consumed ONLY by actual transport attempts
+   * (failWakeTransient). All in ONE txn.
+   */
+  deferWakeWithoutBudget(
+    id: string,
+    opts?: {
+      readonly correlationId?: string;
+      readonly reason?: string;
+      readonly baseMs?: number;
+      readonly capMs?: number;
+    },
+  ): { readonly intent: WakeIntent; readonly notBefore: string; readonly correlationId: string } {
+    const baseMs = opts?.baseMs ?? WAKE_BACKOFF_BASE_MS_DEFAULT;
+    const capMs = opts?.capMs ?? WAKE_BACKOFF_CAP_MS_DEFAULT;
+    const cid = opts?.correlationId ?? crypto.randomUUID();
+    return this.txn(() => {
+      const row = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+      if (row === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+      if (row.state !== "queued" && row.state !== "admitted") {
+        throw new ProtocolError("INVALID_TRANSITION", `Deferral needs queued/admitted, not ${row.state}`, { wakeId: id });
+      }
+      this.deleteLease(this.leaseKeyForMember(row.member_id), id);
+      const notBefore =
+        row.attempts > 0
+          ? new Date(wakeNotBeforeMs(row.updated_at, row.attempts, baseMs, capMs)).toISOString()
+          : nowIso();
+      this.wakeLifecycleEvent("wake_deferred", id, {
+        wakeId: id, memberId: row.member_id, correlationId: cid, reason: opts?.reason ?? "pre-dispatch-deferral",
+      });
+      const updated = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+      if (updated === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+      return { intent: this.toWake(updated), notBefore, correlationId: cid };
+    });
+  }
+
+  /**
+   * Record a quota (402) refusal: quota-pause the member and NEVER
+   * schedule an automatic paid retry. The wake keeps its state; dispatch
+   * stays blocked until an operator/post/model-switch resume. When the
+   * member transition is illegal from its current state, the wake is
+   * quarantined instead so it still cannot auto-retry.
+   */
+  markQuotaBlocked(
+    memberId: string,
+    wakeId?: string,
+    correlationId?: string,
+  ): { readonly member: Member; readonly memberTransition: "applied" | "already" | "skipped-illegal"; readonly quarantinedWakeId: string | null } {
+    return this.txn(() => {
+      const now = nowIso();
+      const cid = correlationId ?? crypto.randomUUID();
+      const member = this.requireMember(memberId);
+      let transition: "applied" | "already" | "skipped-illegal" = "already";
+      let quarantinedWakeId: string | null = null;
+      if (member.internal_state !== "quota_paused") {
+        try {
+          assertMemberTransition(member.internal_state as InternalMemberState, "quota_paused");
+          this.db
+            .query<[], [string, string, string]>(
+              "UPDATE members SET internal_state = 'quota_paused', public_state = ?, last_activity_at = ? WHERE id = ?",
+            )
+            .run(projectPublicState("quota_paused"), now, memberId);
+          transition = "applied";
+        } catch (err) {
+          if (err instanceof ProtocolError && err.code === "INVALID_TRANSITION") {
+            transition = "skipped-illegal";
+          } else {
+            throw err;
+          }
+        }
+      }
+      if (wakeId !== undefined) {
+        const row = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(wakeId);
+        if (row === null) throw new ProtocolError("NOT_FOUND", `Wake ${wakeId} not found`, { wakeId });
+        this.deleteLease(this.leaseKeyForMember(memberId), wakeId);
+        this.wakeLifecycleEvent("wake_quota_blocked", wakeId, {
+          wakeId, memberId, correlationId: cid, memberTransition: transition, attempts: String(row.attempts),
+        });
+        if (transition === "skipped-illegal" && row.state !== "succeeded" && row.state !== "failed" && row.state !== "cancelled") {
+          this.writeLease(this.quarantineKeyForWake(wakeId), "quarantine", now, WAKE_QUARANTINE_TTL_MS);
+          this.wakeLifecycleEvent("wake_quarantined", wakeId, {
+            wakeId, memberId, correlationId: cid, reason: "quota-block-with-illegal-member-transition",
+          });
+          quarantinedWakeId = wakeId;
+        }
+      } else {
+        this.wakeLifecycleEvent("wake_quota_blocked", memberId, { memberId, correlationId: cid, memberTransition: transition });
+      }
+      return { member: this.toMember(this.requireMember(memberId)), memberTransition: transition, quarantinedWakeId };
+    });
+  }
+
+  /** Release a member-turn lease held by the given wake (reconciler path). */
+  releaseWakeLease(memberId: string, holderWakeId: string): boolean {
+    return this.txn(() => this.deleteLease(this.leaseKeyForMember(memberId), holderWakeId));
+  }
+
+  /**
+   * Re-acquire the member-turn lease for an ADMITTED wake whose lease was
+   * lost (crash between claim and submitTurn). Same guards as the fenced
+   * claim, but the wake is already admitted so no state edge is needed —
+   * the reconciler verified the session idle first, and the dispatcher
+   * re-verifies before submitting the SAME externalId (no duplicate
+   * logical action, never blind replay).
+   */
+  reacquireWakeLease(
+    id: string,
+    opts?: { readonly leaseTtlMs?: number; readonly correlationId?: string; readonly nowIso?: string; readonly baseMs?: number; readonly capMs?: number },
+  ): WakeDispatchClaim {
+    const leaseTtlMs = opts?.leaseTtlMs ?? WAKE_LEASE_TTL_MS_DEFAULT;
+    const correlationId = opts?.correlationId ?? crypto.randomUUID();
+    const baseMs = opts?.baseMs ?? WAKE_BACKOFF_BASE_MS_DEFAULT;
+    const capMs = opts?.capMs ?? WAKE_BACKOFF_CAP_MS_DEFAULT;
+    return this.txn(() => {
+      const now = opts?.nowIso ?? nowIso();
+      const row = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+      if (row === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+      // S2-2 in-txn paused-swarm guard (mirror of the claim guard): a
+      // paused/terminal swarm never re-acquires — the admitted wake is
+      // preserved untouched (no state edge, no lease write) for resume.
+      const swarmStatus = this.requireSwarm(row.swarm_id).status;
+      if (
+        swarmStatus === "paused" ||
+        swarmStatus === "completing" ||
+        swarmStatus === "completed" ||
+        swarmStatus === "failed" ||
+        swarmStatus === "cancelled"
+      ) {
+        this.wakeLifecycleEvent("wake_deferred", id, {
+          wakeId: id, memberId: row.member_id, correlationId, reason: `swarm-${swarmStatus}`,
+        });
+        return { status: "deferred-ineligible", intent: this.toWake(row) };
+      }
+      if (row.state !== "admitted") {
+        throw new ProtocolError("INVALID_TRANSITION", `Re-acquire needs admitted, not ${row.state}`, { wakeId: id });
+      }
+      const member = this.requireMember(row.member_id);
+      if (member.internal_state === "killed" || member.generation !== row.member_generation) {
+        this.db
+          .query<[], [string, string]>("UPDATE wake_intents SET state = 'cancelled', updated_at = ? WHERE id = ?")
+          .run(now, id);
+        this.wakeLifecycleEvent("wake_cancelled_stale", id, {
+          wakeId: id, memberId: row.member_id, correlationId, reason: "stale-generation-or-killed",
+        });
+        const updated = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+        if (updated === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+        return { status: "deferred-stale", intent: this.toWake(updated) };
+      }
+      if (member.internal_state === "quota_paused" || member.internal_state === "approval_paused") {
+        this.wakeLifecycleEvent("wake_deferred", id, {
+          wakeId: id, memberId: row.member_id, correlationId, reason: `ineligible-member-state:${member.internal_state}`,
+        });
+        return { status: "deferred-ineligible", intent: this.toWake(row) };
+      }
+      if (row.attempts > 0 && wakeNotBeforeMs(row.updated_at, row.attempts, baseMs, capMs, Date.parse(now)) > Date.parse(now)) {
+        this.wakeLifecycleEvent("wake_deferred", id, {
+          wakeId: id, memberId: row.member_id, correlationId, reason: "backoff-pending",
+        });
+        return { status: "deferred-backoff", intent: this.toWake(row) };
+      }
+      const other = this.db
+        .query<{ id: string }, [string, string]>(
+          "SELECT id FROM wake_intents WHERE member_id = ? AND id != ? AND state IN ('admitted','observed_running') LIMIT 1",
+        )
+        .get(row.member_id, id);
+      if (other !== null) {
+        this.wakeLifecycleEvent("wake_deferred", id, {
+          wakeId: id, memberId: row.member_id, correlationId, reason: `live-turn-active:${other.id}`,
+        });
+        return { status: "deferred-live-turn", intent: this.toWake(row) };
+      }
+      const quarantine = this.readLease(this.quarantineKeyForWake(id));
+      if (this.leaseLive(quarantine, now)) {
+        this.wakeLifecycleEvent("wake_deferred", id, {
+          wakeId: id, memberId: row.member_id, correlationId, reason: "quarantined",
+        });
+        return { status: "deferred-quarantined", intent: this.toWake(row) };
+      }
+      const internal = member.internal_state;
+      if (internal === "waiting" || internal === "starting" || internal === "recovering") {
+        assertMemberTransition(internal, "working");
+        this.db
+          .query<[], [string, string, string]>(
+            "UPDATE members SET internal_state = 'working', public_state = ?, last_activity_at = ? WHERE id = ?",
+          )
+          .run(projectPublicState("working"), now, member.id);
+      }
+      const lease = this.writeLease(this.leaseKeyForMember(row.member_id), id, now, leaseTtlMs);
+      this.wakeLifecycleEvent("wake_admitted", id, {
+        wakeId: id, memberId: row.member_id, correlationId,
+        fencingToken: String(lease.fencingToken), leaseExpiresAt: lease.expiresAt, reacquired: "true",
+      });
+      return {
+        status: "admitted", intent: this.toWake(row),
+        fencingToken: lease.fencingToken, leaseExpiresAt: lease.expiresAt, correlationId,
+      };
+    });
+  }
+
+  /** Deterministic retry gate for an admitted wake (null when immediately retryable). */
+  wakeRetryNotBefore(id: string, baseMs: number = WAKE_BACKOFF_BASE_MS_DEFAULT, capMs: number = WAKE_BACKOFF_CAP_MS_DEFAULT): string | null {
+    const row = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+    if (row === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+    if (row.attempts <= 0) return null;
+    return new Date(wakeNotBeforeMs(row.updated_at, row.attempts, baseMs, capMs)).toISOString();
+  }
+
+  /** Inspect the live member-turn lease (null when free/expired-unknown). */
+  getWakeLeaseInfo(memberId: string): { holder: string; fencingToken: number; expiresAt: string } | null {
+    return this.readLease(this.leaseKeyForMember(memberId));
+  }
+
+  /**
+   * Quarantine an ambiguous wake (lost-ack, unknown admission outcome):
+   * persistent 24h marker + outbox record, NO state change, NO resubmit.
+   * Clear only via clearWakeQuarantine after operator review.
+   */
+  quarantineWake(id: string, reason: string, correlationId?: string): WakeIntent {
+    return this.txn(() => {
+      const now = nowIso();
+      const cid = correlationId ?? crypto.randomUUID();
+      const row = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+      if (row === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+      if (row.state === "succeeded" || row.state === "failed" || row.state === "cancelled") {
+        throw new ProtocolError("INVALID_TRANSITION", `Cannot quarantine terminal wake ${id} (${row.state})`, { wakeId: id });
+      }
+      this.writeLease(this.quarantineKeyForWake(id), "quarantine", now, WAKE_QUARANTINE_TTL_MS);
+      this.wakeLifecycleEvent("wake_quarantined", id, { wakeId: id, memberId: row.member_id, correlationId: cid, reason });
+      const updated = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+      if (updated === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+      return this.toWake(updated);
+    });
+  }
+
+  /** Clear a quarantine marker after operator review (persistent record). */
+  clearWakeQuarantine(id: string, correlationId?: string): WakeIntent {
+    return this.txn(() => {
+      const cid = correlationId ?? crypto.randomUUID();
+      const row = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+      if (row === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+      this.db.query<[], [string]>("DELETE FROM leases WHERE resource_key = ?").run(this.quarantineKeyForWake(id));
+      this.wakeLifecycleEvent("wake_quarantine_cleared", id, { wakeId: id, memberId: row.member_id, correlationId: cid });
+      return this.toWake(row);
+    });
+  }
+
+  /** True when a live (unexpired) quarantine marker names this wake. */
+  isWakeQuarantined(id: string, now?: string): boolean {
+    return this.leaseLive(this.readLease(this.quarantineKeyForWake(id)), now ?? nowIso());
+  }
+
+  /** Cancel a stale wake (killed/stale-generation found by the reconciler). */
+  cancelStaleWake(id: string, reason: string, correlationId?: string): WakeIntent {
+    return this.txn(() => {
+      const now = nowIso();
+      const cid = correlationId ?? crypto.randomUUID();
+      const row = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+      if (row === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+      if ((row.state as WakeState) === "cancelled") return this.toWake(row);
+      assertWakeTransition(row.state as WakeState, "cancelled");
+      this.db
+        .query<[], [string, string]>("UPDATE wake_intents SET state = 'cancelled', updated_at = ? WHERE id = ?")
+        .run(now, id);
+      this.deleteLease(this.leaseKeyForMember(row.member_id), id);
+      this.wakeLifecycleEvent("wake_cancelled_stale", id, {
+        wakeId: id, memberId: row.member_id, correlationId: cid, reason,
+      });
+      const updated = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(id);
+      if (updated === null) throw new ProtocolError("NOT_FOUND", `Wake ${id} not found`, { wakeId: id });
+      return this.toWake(updated);
+    });
+  }
+
+  /**
+   * Oldest-first eligible queued wakes: member in an admittable state,
+   * generation matches, not quarantined, backoff ceiling elapsed.
+   * (Ordering = created_at FIFO = board-fair order; identity/ownership
+   * preserved because every row carries memberId + delivery_key.)
+   */
+  listEligibleQueuedWakes(
+    swarmId: string,
+    limit = 100,
+    opts?: { readonly baseMs?: number; readonly capMs?: number; readonly nowMs?: number },
+  ): WakeIntent[] {
+    const baseMs = opts?.baseMs ?? WAKE_BACKOFF_BASE_MS_DEFAULT;
+    const capMs = opts?.capMs ?? WAKE_BACKOFF_CAP_MS_DEFAULT;
+    const nowMs = opts?.nowMs ?? Date.now();
+    const now = new Date(nowMs).toISOString();
+    const rows = this.db
+      .query<WakeRow, [string]>(
+        "SELECT * FROM wake_intents WHERE swarm_id = ? AND state = 'queued' ORDER BY created_at ASC, id ASC LIMIT 500",
+      )
+      .all(swarmId);
+    const eligible: WakeIntent[] = [];
+    for (const row of rows) {
+      if (eligible.length >= limit) break;
+      let member: MemberRow | null = null;
+      try {
+        member = this.requireMember(row.member_id);
+      } catch {
+        continue;
+      }
+      if (member === null) continue;
+      if (
+        member.internal_state === "killed" ||
+        member.internal_state === "quota_paused" ||
+        member.internal_state === "approval_paused"
+      ) {
+        continue;
+      }
+      if (member.generation !== row.member_generation) continue;
+      const quarantine = this.readLease(this.quarantineKeyForWake(row.id));
+      if (this.leaseLive(quarantine, now)) continue;
+      if (row.attempts > 0 && wakeNotBeforeMs(row.updated_at, row.attempts, baseMs, capMs, nowMs) > nowMs) continue;
+      const live = this.db
+        .query<{ id: string }, [string]>(
+          "SELECT id FROM wake_intents WHERE member_id = ? AND state IN ('admitted','observed_running') LIMIT 1",
+        )
+        .get(row.member_id);
+      if (live !== null) continue;
+      const memberLease = this.readLease(this.leaseKeyForMember(row.member_id));
+      if (this.leaseLive(memberLease, now) && memberLease !== null && memberLease.holder !== row.id) continue;
+      eligible.push(this.toWake(row));
+    }
+    return eligible;
+  }
+
+  /** Admitted/observed_running wakes needing reconciliation (restart path). */
+  listUnsettledWakes(swarmId: string, limit = 100): WakeIntent[] {
+    return this.db
+      .query<WakeRow, [string, number]>(
+        "SELECT * FROM wake_intents WHERE swarm_id = ? AND state IN ('admitted','observed_running') ORDER BY created_at ASC, id ASC LIMIT ?",
+      )
+      .all(swarmId, limit)
+      .map((r) => this.toWake(r));
+  }
+
+  /** The single live (admitted/observed_running) wake for a member, if any. */
+  findLiveWakeForMember(memberId: string): WakeIntent | null {
+    const row = this.db
+      .query<WakeRow, [string]>(
+        "SELECT * FROM wake_intents WHERE member_id = ? AND state IN ('admitted','observed_running') ORDER BY created_at ASC LIMIT 1",
+      )
+      .get(memberId);
+    return row === null ? null : this.toWake(row);
+  }
+
+  private assertWakeFencing(memberId: string, wakeId: string, fencingToken: number | undefined): void {
+    if (fencingToken === undefined) return;
+    const lease = this.readLease(this.leaseKeyForMember(memberId));
+    if (lease !== null && lease.holder !== wakeId) {
+      throw new ProtocolError("LIVE_TURN_ACTIVE", `Fencing conflict: member turn held by ${lease.holder}`, {
+        memberId, wakeId, holder: lease.holder,
+      });
+    }
+    if (lease !== null && lease.holder === wakeId && lease.fencingToken !== fencingToken) {
+      throw new ProtocolError("LIVE_TURN_ACTIVE", `Stale fencing token ${fencingToken} (current ${lease.fencingToken})`, {
+        memberId, wakeId,
+      });
+    }
   }
 
   // --- Verification evidence (real process proof, not model prose) ---
