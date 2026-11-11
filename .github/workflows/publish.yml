@@ -33,18 +33,19 @@ concurrency:
 jobs:
   verify:
     name: verify (install, typecheck, test)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Bun 1.4.4
+        # oven-sh/setup-bun@v2 is Node24-native (action.yml: using node24); no newer Node24 major — keep v2.
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
 
       - name: Setup Node 24 (npm compat)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
 
@@ -76,22 +77,23 @@ jobs:
   publish:
     name: publish to GitHub Packages
     needs: verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
       id-token: write # npm --provenance (Sigstore/OIDC)
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Bun 1.4.4
+        # oven-sh/setup-bun@v2 is Node24-native (action.yml: using node24); no newer Node24 major — keep v2.
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.4
 
       - name: Setup Node 24 (npm compat)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
 
