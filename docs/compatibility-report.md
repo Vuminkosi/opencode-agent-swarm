@@ -231,3 +231,48 @@ paid-path autonomy claim. [PROBE]
    admitted-but-unacked wakes quarantine for operator review by design. [DESIGN]
 4. No live-server, screenshot, deployment, endpoint, CLI-flag, release, or
    support-promise claims are made in this addendum. [DESIGN]
+
+## 9. M4 safe-coding compatibility addendum (DOC-M4-01)
+
+> **Document status for this section only: APPROVED CONTRACT + IMPLEMENTED
+> (FakeHarness + tmp-Git simulations) / COMMITTED at `7330e0e`.**
+> Live-server and live-inference behavior remain **NOT VERIFIED**. §§1–8
+> above are unchanged M0/M2/M3 baseline; nothing below rewrites them. [DESIGN]
+
+- **Baseline:** HEAD `7330e0e2516561b4fb974602a3e3665d2433a3c2` —
+  `feat(m4): add git-workspaces, verification runner and integration gate (M4-01/M4-02/M4-03)`; 12 files, 4911 insertions, zero deletions.
+  Prior: `e7a0b8f` (M3) → … → `4b4b616` → `7330e0e` (M4, HEAD). [PROBE]
+- **Constraint compliance:** M0–M3 files untouched; **no store migration file** (no `003` file — `integration_runs` is service-owned via `ensureIntegrationSchema()` idempotent DDL on the shared DB handle); **no protocol change** (no `packages/protocol` file in the commit). [DESIGN]
+- **Evidence:** 74 + 23 + 13 focused PASS (FakeHarness/tmp-Git, supplied), full 246 observed (supplied), tsc × 3 clean (supplied), m105 4 environment FAILs external — see [m4-safe-coding evidence](evidence/m4-safe-coding.md) §§4/7 for the per-acceptance map and honest repro scope. Live inference NOT VERIFIED. [PROBE]
+
+### 9.1 Q-03 decision: git CLI vs OpenCode worktree SDK
+
+| Surface | Status in M4 |
+|---|---|
+| Worktree transport | **Git CLI via `Bun.spawn` argv-only (never a shell).** The OpenCode worktree SDK `projectID` is unresolved, so the undocumented plugin worktree API is NOT used. Allowlists on every agent-supplied string (taskId/branch/commit); `..`/separator/UNC handling lexical + ancestor-aware physical. [DESIGN] — IMPLEMENTED, live worktree-API behavior NOT VERIFIED |
+| Q-03 (spec §18) | Still OPEN as a live-SDK question, but **decided for implementation**: git CLI is the M4 transport. The SDK path stays a non-default future, not a blocker for safe-coding closeout. [DESIGN] |
+| Live probes 01–12 | Still NOT VERIFIED — no `probe-NN.log` exists in the repo. M4 simulations close no live probe. [PROBE] |
+
+### 9.2 Windows / UNC / junction limits (known, reported verbatim) [DESIGN]
+
+- Comparison is lowercased NTFS-semantic (`\`-unified, drive/UNC-server casefolded); **comparison forms never drive FS operations** — records carry the case-preserving physical spelling (S2 F-03). [DESIGN] — IMPLEMENTED
+- Symlink/junction resolution is ancestor-aware but **best-effort**: only existing ancestors resolve via realpath (8.3 short-name expansion included); a hostile link swapped in after validation (TOCTOU) is NOT detected by the policy module — creation and validation are re-checked at use time (refresh before destructive ops, `resolveWorktreeDir` + `finalComponentIsLink` in the runner, physical-form gates in the manager). [DESIGN]
+- Remote UNC targets compare lexically; the local host cannot canonicalize a remote server's reparse points. Space-bearing paths integrate cleanly (argv-only, no shell — covered by the `windows paths` test). [DESIGN] — IMPLEMENTED, live Windows-fleet behavior NOT VERIFIED
+
+### 9.3 Runner hardening notes (canonical protection, redaction, KillTree, evidence root) [DESIGN]
+
+- **Canonical protection:** tmp worktree only; symlink/junction worktree denied; worktree inside the canonical root denied (explicit + discovered `git rev-parse --show-toplevel` root); evidence root constrained to `os.tmpdir()` (SEC F4, physical-form gate for not-yet-created leaves). [DESIGN] — IMPLEMENTED
+- **Redaction:** secret patterns redacted from artifacts, persisted DTO command, and never logged; the disposable run script (`run.cmd`/`run.sh`) is unlinked after spawn. Non-capturing-pattern `[REDACTED]` shape pinned (F-01); key=value keeps `name=[REDACTED]`. [DESIGN] — IMPLEMENTED
+- **KillTree:** `taskkill /T` on win32 (exit-code-checked, fallback to `proc.kill`); POSIX detached group `kill(-pid)` targeting exactly the spawned tree (R01-01); bounded 5 s drain guard after kill so a killed tree holding pipes cannot hang the runner. [DESIGN] — IMPLEMENTED, live kill-tree behavior NOT VERIFIED beyond simulations
+- **Evidence root:** disposable `verification-<uuid>/` dir with best-effort `0700`; `stdout.log`/`stderr.log` sha256-pinned into the DTO; §5 wire lengths pre-validated before spawn (F-04); Zod `RecordEvidenceInputSchema` enforced before handoff. [DESIGN] — IMPLEMENTED
+
+### 9.4 F-04: harness 402-shape — NOT VERIFIED (carried, not closed)
+
+**F-04 (harness 402-shape): NOT VERIFIED.** [PROBE] M4 adds no inference path and no paid-service call; the M2 quota posture (`quota_paused`, never auto-retry) is carried unchanged. The exact 402/quota error shape a live provider surfaces remains unproven — see §7.2. Assignment-supplied m105 environment FAILs (4, external) are recorded as environment-external, not product evidence. Resumption: capture a live 402 in a disposable probe run and reconcile `isQuotaError` before any paid-path autonomy claim. [PROBE]
+
+### 9.5 M4 gaps and NOT VERIFIED list (additive to §§5/7.3/8.3)
+
+1. Live turns, overlap figures, provider 402 shaping, and live kill-tree / live Windows-fleet behavior are NOT VERIFIED (no live server, no inference spend). [PROBE]
+2. Focused/full/typecheck counts (74 + 23 + 13, 246, tsc × 3) and the 136–149 evolution span are supplied evidence cited in [m4-safe-coding](evidence/m4-safe-coding.md), not fresh executions of this doc session (link check only). [PROBE]
+3. Exactly-once physical delivery is not claimed; ambiguous admissions quarantine for operator review by design. [DESIGN]
+4. No live-server, screenshot, deployment, endpoint, CLI-flag, release, or support-promise claims are made in this addendum. [DESIGN]
