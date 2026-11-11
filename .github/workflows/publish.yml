@@ -110,7 +110,7 @@ jobs:
       # Exit code propagates: any real `npm publish` failure fails the job.
       - name: Publish public packages (private packages skipped)
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.PUBLISH_GITHUB_TOKEN }}
         run: |
           fail=0
           for PKG in packages/protocol packages/runtime packages/adapter-opencode packages/plugin apps/swarmctl; do
