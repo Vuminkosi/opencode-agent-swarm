@@ -1,0 +1,33 @@
+# Dependencies — never commit installed packages.
+# NOTE: bun.lock is intentionally NOT ignored; it must stay tracked.
+node_modules/
+bun-debug.log*
+
+# Probe outputs — generated evidence, not source.
+scripts/probe-logs/*.log
+scripts/probe-logs/probe-*/
+probe-logs/
+*.log
+
+# SQLite probe/state artifacts.
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+
+# Swarm probe disposable dirs / temp state.
+.opencode-swarm/
+.swarm-probes/
+swarm-probes/
+
+# OS artifacts.
+.DS_Store
+Thumbs.db
+
+# Coverage and build outputs.
+coverage/
+.nyc_output/
+dist/
+build/
+out/
+.turbo/

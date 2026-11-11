@@ -1,0 +1,12 @@
+{
+  "name": "@opencode-swarm/adapter-opencode",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Frozen OpenCode harness adapter port (C-HARNESS-01). Dependency-free TypeScript interfaces only.",
+  "main": "./src/port.ts",
+  "types": "./src/port.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}

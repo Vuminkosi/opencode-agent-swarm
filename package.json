@@ -1,0 +1,17 @@
+{
+  "name": "opencode-swarm",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "OpenCode Swarm — Antigravity /swarm behavioral parity (M0-01 toolchain and API lock)",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p packages/adapter-opencode/tsconfig.json",
+    "probes": "bun scripts/run-probes.ts"
+  },
+  "devDependencies": {
+    "typescript": "5.9.2"
+  }
+}
