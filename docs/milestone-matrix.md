@@ -27,7 +27,8 @@
 | M1-05 — Demonstrator fixture | Disposable two-module fixture + e2e + demo | `513862c` (M1-05-COMMIT-01) | PASS (committed) / live NOT VERIFIED | commit subject; counts not re-stated here |
 | Publish workflow | Warning-free workflow refs, Node24 | `d22d8c1` (PUBLISH-COMMIT-02) | PASS (committed) | commit subject |
 | **M2 — Real sleep/wake** | Wake queue + dispatcher + reconciler + events; `delivery_key` UNIQUE + fencing; 402 quota-pause without retry; bounded transient backoff; quarantine-on-ambiguity; idle-zero | **`c62c824`** (M2-01-COMMIT-01) + M2-01-FIX-REVIEW-01 evidence (S2-1/S2-2/F-01) | **PASS: 20 wake + 98 runtime tests (FakeHarness), typecheck clean / live turns NOT VERIFIED / COMMITTED** | [m2-wake-engine](evidence/m2-wake-engine.md) |
-| M3+ — Autonomous team and beyond | Planner, task DAG, verifier, monitor; M4–M8 per spec §14 | — | TODO (not started) | [spec](plan/spec.md) §14 |
+| **M3 — Autonomous team** | Planner, groups, task DAG, verifier, dormant monitor; 26 coordination tests (21 base + S1-01/S1-02/S2-01/02/03 fixes) | **`e7a0b8f`** (M3-01-COMMIT-01; 8 files, 1678 insertions; fixes folded in, no separate fix commit in log) | **PASS: 26 coordination + 124 runtime + 188 repo tests (FakeHarness), typecheck clean / live turns NOT VERIFIED / COMMITTED** | [m3-coordination](evidence/m3-coordination.md) |
+| M4+ — Git safety and beyond | Worktrees, real runner, integration, M5–M8 per spec §14 | — | TODO (not started) | [spec](plan/spec.md) §14 |
 
 ## M2 gate detail (why M2 is PASS-with-qualification, not fully VERIFIED)
 
@@ -51,4 +52,4 @@
 
 IMPLEMENTED (code-observed) / VERIFIED (executed evidence reviewed) /
 COMMITTED (`c62c824` cited; not a release) / NOT VERIFIED (no live log) /
-TODO (M3+). Live inference stays NOT VERIFIED across all rows.
+TODO (M4+). Live inference stays NOT VERIFIED across all rows.

@@ -178,3 +178,56 @@ the observation before any paid-path autonomy claim. [PROBE]
    admitted-but-unacked wakes quarantine for operator review by design. [DESIGN]
 3. No live-server, screenshot, deployment, endpoint, CLI-flag, release, or
    support-promise claims are made in this addendum. [DESIGN]
+
+## 8. M3 coordination compatibility addendum (DOC-M3-01)
+
+> **Document status for this section only: APPROVED CONTRACT + IMPLEMENTED
+> (FakeHarness simulations) / COMMITTED at `e7a0b8f`.** Live-server and
+> live-inference behavior remain **NOT VERIFIED**. §§1–7 above are unchanged
+> M0/M2 baseline; nothing below rewrites them. [DESIGN]
+
+- **Baseline:** HEAD `e7a0b8f677045c67a34a9e09daf643333ac21a9e` —
+  `feat(runtime): M3 coordination core + S1/S2 fixes (M3-01)`; 8 files, 1678
+  insertions. Prior: `c62c824` (M2) → `937af39` (DOC-M2-01) →
+  `9f595ad` (checklist) → `e7a0b8f` (M3-01, HEAD). [PROBE]
+- **Constraint compliance:** M0/M1/M2 files untouched; no new migration
+  (services project over the M1-01 journal + M2 wake rows); protocol DTOs
+  untouched. [DESIGN]
+- **Evidence:** 26 coordination + 124-test runtime + 188-test repo suites PASS
+  (FakeHarness + tmp-SQLite), typecheck clean — see [m3-coordination
+  evidence](evidence/m3-coordination.md) §§4/9 for the full test map and
+  reproducible commands. [PROBE]
+
+### 8.1 Mention / board / lead / verifier / monitor vs OpenCode 2.2.7
+
+| Surface | Status in M3 |
+|---|---|
+| Mention resolution (`@member`/`@group`/`@all`) | Store-owned snapshot resolution at post commit (author/killed excluded); lexer + fanout covered by committed simulation tests. No new native API assumed. [DESIGN] — IMPLEMENTED, live mention-turn behavior NOT VERIFIED |
+| Board read models (roster/history/pending/delivery) | Pure SQLite projections over the frozen journal; zero inference, zero harness calls. No native TUI surface assumed. [DESIGN] — IMPLEMENTED |
+| Lead sleep/wake + private steering | Store transitions + `user_direct` intents through the M2 queue-only dispatch lane; private text travels only in the wake payload, never a post row. No `queue` vs `steer` semantic change. [DESIGN] — IMPLEMENTED, live turn behavior NOT VERIFIED |
+| Verifier gate (`assertVerifierAccept`, defect fanout, `attempt++`) | Daemon-side policy only; evidence rows are local artifacts. No native session/model surface assumed. [DESIGN] — IMPLEMENTED |
+| Dormant monitor (quiescence + cooldown + one intervention) | Scheduler policy with zero inference; intervention dispatches through the M2 lane. Default quiet 5 min / cooldown 15 min are proposed values, not claimed Antigravity defaults. [DESIGN] — IMPLEMENTED, live quiescence timing NOT VERIFIED |
+| Live probes 01–12 | Still NOT VERIFIED — no `probe-NN.log` exists in the repo. M3 simulations close no live probe. [PROBE] |
+
+### 8.2 F-04: harness 402-shape — NOT VERIFIED (carried, not closed)
+
+**F-04 (harness 402-shape): NOT VERIFIED.** [PROBE] The M3 quota path
+(`quota_paused`, never auto-retry, monitor `suppressed`) is IMPLEMENTED and
+FakeHarness-tested, but the exact 402/quota error shape the M1-03
+`OpenCodeHarness` surfaces against a live provider on quota exhaustion
+remains unproven — see §7.2. Assignment-supplied LIVE-PROBE-01 402 zero-spend
+is recorded as a supplied claim, not repo evidence. Resumption: capture a
+live 402 in a disposable probe run and reconcile `isQuotaError` before any
+paid-path autonomy claim. [PROBE]
+
+### 8.3 M3 gaps and NOT VERIFIED list (additive to §§5/7.3)
+
+1. Live three-worker turns, overlap figures, and provider 402 shaping are NOT
+   VERIFIED (no live server, no inference spend). [PROBE]
+2. The `119` count figure from the task baseline matches no observed suite
+   (actuals: 26 coordination / 124 runtime / 35 protocol / 188 repo-wide) and
+   is NOT VERIFIED. [PROBE]
+3. Exactly-once physical delivery is not claimed; ambiguous
+   admitted-but-unacked wakes quarantine for operator review by design. [DESIGN]
+4. No live-server, screenshot, deployment, endpoint, CLI-flag, release, or
+   support-promise claims are made in this addendum. [DESIGN]
