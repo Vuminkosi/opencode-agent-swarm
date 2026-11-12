@@ -455,3 +455,49 @@ One untracked junk file `NUL` sits at the repo root; it is in neither M6 commit,
 3. Codex transport is honestly unbuilt — four gating questions open; no stable-verb, session-identity, model-mapping, or snapshot claim is made. [DESIGN]
 4. Exactly-once physical delivery is not claimed; ambiguous admissions quarantine for operator review by design. [DESIGN]
 5. No live-server, screenshot, deployment, endpoint, CLI-flag, release, or support-promise claims are made in this addendum. [DESIGN]
+
+## 13. M8 residual-hardening compatibility addendum (DOC-M8-01)
+
+> **Document status for this section only: APPROVED CONTRACT + IMPLEMENTED
+> (FakeHarness + tmp-Git/tmp-SQLite/disposable-tmp simulations, supplied —
+> not freshly executed here) / COMMITTED at `7d4d79b`.** Live-server and
+> live-inference behavior remain **NOT VERIFIED**. §§1–12 above are unchanged
+> M0/M2/M3/M4/M5/M6/M7 baseline; nothing below rewrites them. [DESIGN]
+
+- **Baseline:** HEAD `7d4d79b42b6a775a31fbe9bfca458045714a2ef4` —
+  `feat(m8): residual hardening - scan-cap, digit-guard, timeout, contention, lockfile resync (M8-CODE-COMMIT-01)`; 7 files, 1074 insertions, 28 deletions.
+  Prior: `9111c4a` (M7) → `8ea372f` (DOC-M7-01) → `7d4d79b` (M8, HEAD). [PROBE]
+- **Constraint compliance:** no protocol change (no `packages/protocol` file in the commit); **no migration file** (no `.sql` file — service-owned ensure precedent carried); no OpenCode default change (bridge Tier-A surface untouched, `OpenCodeHarness`/`backend: "opencode"` unshadowed). Deltas are confined to runtime services (`rate-limiter`, `recovery`, `wake-dispatcher`), their focused tests, the new `tests/fault-injection/m8-release.test.ts` suite (560 lines), and a `bun.lock` resync (48 lines). [DESIGN]
+- **Evidence:** M8 release suite + focused rate-limit/recovery additions PASS (FakeHarness/tmp-Git/tmp-SQLite, supplied — not fresh executions of this doc session); live inference NOT VERIFIED. [PROBE]
+
+### 13.1 No new OpenCode APIs assumed [DESIGN]
+
+| Surface | Status in M8 |
+|---|---|
+| Harness / session / model surface | Unchanged by M8. The scan-cap bounds store reads, digit-guards anchor classifier tokens, and `timeoutMs` bounds one transport attempt — no new native method, event, permission, or model ref assumed. [DESIGN] — IMPLEMENTED, live transport behavior NOT VERIFIED |
+| Codex transport | Honestly unbuilt (carried): the M8 suite never imports the M7 fail-closed stub (absence asserted in-suite). Four gating items stay open — (1) stable non-`[experimental]` verb set covering the full port, (2) session-identity mapping (thread UUID ↔ `sessionId`, resume/fork), (3) `ModelRef` ↔ Codex model-string mapping, (4) stable completion/snapshot semantic for `getSession` + crash-window dedupe — per the [adapter-codex probe log](../packages/adapter-codex/README.md). [DESIGN] — NOT VERIFIED |
+| Live TUI mount | Still NOT VERIFIED; the terminal board (`bunx opencode-swarm board`) remains the contract-approved fallback per spec §4.4 (M6 carry). [PROBE] |
+| Live probes 01–12 | Still NOT VERIFIED — no `probe-NN.log` exists in the repo. M8 simulations close no live probe. [PROBE] |
+
+### 13.2 Bound notes (no unbounded behavior introduced) [DESIGN]
+
+- Outbox replay: every pass READS at most `REPLAY_SCAN_CAP` (2000) rows no matter how deep the backlog; delivery per pass stays capped by `maxPerRun`; a >10k-row backlog drains across bounded passes. Filtered (per-swarm) fairness is best-effort: one pass may starve without widening the scan; callers redrive until drained. [DESIGN] — IMPLEMENTED
+- 429/transient retries keep the M5 bounded exp-backoff + retry budget; a set `timeoutMs` (> 0, finite) fails a hung attempt as bounded transient under the same budget, never unbounded; unset means no deadline. 402 quota stays one-attempt/never-retry; 401/403 auth stays one-attempt/never-retry (dispatcher and limiter classifiers agree via anchored tokens). [DESIGN] — IMPLEMENTED, live timing behavior NOT VERIFIED
+
+### 13.3 Residual list + carry [DESIGN/PROBE]
+
+- **M8-01-FIX-01 folded into the commit** (code-observed comments, not fresh review evidence here): null-status fallthrough (status-less auth shapes route to code/message checks, never transient-with-budget), dispatcher/limiter digit-guard parity, numeric/string agreement on 408/502/503/504, NULL-swarm quarantine (unknown/vanished aggregates excluded from filtered replays, preserved via unfiltered legacy replay). [DESIGN]
+- **S2 follow-ups: documented residuals, non-blocking** (supplied M8 review disposition — no finding IDs invented here). [PROBE]
+- **F-04 (harness 402-shape): NOT VERIFIED (carried, not closed).** M8 adds no inference path and no paid-service call; the M2 quota posture is carried unchanged. [PROBE]
+
+### 13.4 Housekeeping note [PROBE]
+
+One untracked junk file `NUL` sits at the repo root; it is in neither M8 commit file list, is never cited as evidence, and was left untouched. Untracked `NUL` is uncommitted noise, not a committed artifact.
+
+### 13.5 M8 gaps and NOT VERIFIED list (additive to §§5/7.3/8.3/9.5/10.5/11.5/12.5)
+
+1. Live inference/spend, live server turns, live contention timing, provider 402/401-403 shaping, and live kill-tree behavior are NOT VERIFIED (no live server, no inference spend). [PROBE]
+2. Focused/carried/typecheck counts (M8 suite + additions, carried priors) are supplied evidence, not fresh executions of this doc session (link check only). [PROBE]
+3. Codex transport is honestly unbuilt — the four gating items above stay open; no stable-verb, session-identity, model-mapping, or snapshot claim is made. [DESIGN]
+4. Exactly-once physical delivery is not claimed; ambiguous admissions quarantine for operator review by design. [DESIGN]
+5. No live-server, screenshot, deployment, endpoint, CLI-flag, release, or support-promise claims are made in this addendum. [DESIGN]

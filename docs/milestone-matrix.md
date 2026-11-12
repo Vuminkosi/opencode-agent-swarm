@@ -32,7 +32,8 @@
 | **M5 — Robustness** | Crash replay + rate limiting (M5-01/M5-02): durable leases (fencing high-water + CAS, fail-closed), outbox/session replay, 429 bounded+jitter+budget, 402/401/403 zero follow-up, usage ledger | **`69f40a9`** (M5-01/M5-02-COMMIT-01; 8 files, 3527 insertions) | **PASS (simulation): 19 recovery + 8 crash-replay + 35 rate-limit + 4 rate-quota (FakeHarness/tmp-Git, supplied) / live inference NOT VERIFIED / COMMITTED** — M4 S2-1…S2-3 committed c10e0be, m105 cleared b54c50c, F-01 accepted-risk + revisit | [m5-robustness](evidence/m5-robustness.md) |
 | **M6 — Parity UX** | `/swarm` family + native TUI/RPC wiring + terminal board fallback | **`817835a`** (M6-0103-FIX-REVIEW-01; 8 files, 1737 insertions, 76 deletions) + **`ccf0db6`** (M6-BOARD-COMMIT-01; 4 files, 1592 insertions) | **PASS (simulation): 51 plugin + 34 board tests (FakeHarness/tmp, supplied), tsc × 2 clean (supplied) / live TUI mount + live inference NOT VERIFIED / COMMITTED** — S2 fixes + re-reviews folded into `817835a`; plugin/board reviews COMMIT-ready 0 findings (supplied); M7+ TODO | [m6-parity-ux](evidence/m6-parity-ux.md) |
 | **M7 — Scale + Codex probe** | Scale validation suite + bench + fail-closed Codex probe | **`9111c4a`** (M7-CODE-COMMIT-01; 8 files, 1859 insertions) | **PASS (simulation): 10 scale + 5 fault-injection + 9 Codex fail-closed rows (FakeHarness/tmp, supplied), bench supplied, tsc × 2 + adapter typecheck supplied clean / live inference NOT VERIFIED / COMMITTED** — S2 accepted follow-ups + F-04 carried, non-blocking | [m7-scale-codex](evidence/m7-scale-codex.md) |
-| M8+ — Release readiness | M8 per spec §14 | — | TODO (not started) | [spec](plan/spec.md) §14 |
+| **M8 — Residual hardening** | Scan-cap, digit-guard, per-attempt timeout, contention, lockfile resync | **`7d4d79b`** (M8-CODE-COMMIT-01; 7 files, 1074 insertions, 28 deletions) | **PASS (simulation, supplied — not freshly executed here) / live NOT VERIFIED / COMMITTED** — M8-01-FIX-01 findings folded in; S2 follow-ups as documented residuals, non-blocking [DESIGN] [PROBE] | commit file list (`git show --stat HEAD`); [spec](plan/spec.md) §14 |
+| M8+ — Release readiness | M8 per spec §14 | — | TODO (release qualification pending; M8 hardening code COMMITTED — see M8 row) | [spec](plan/spec.md) §14 |
 
 ## M2 gate detail (why M2 is PASS-with-qualification, not fully VERIFIED)
 
@@ -55,5 +56,5 @@
 ## Claim statuses used in this matrix
 
 IMPLEMENTED (code-observed) / VERIFIED (executed evidence reviewed) /
-COMMITTED (`9111c4a` cited; not a release) / NOT VERIFIED (no live log) /
+COMMITTED (`9111c4a`/`7d4d79b` cited; not a release) / NOT VERIFIED (no live log) /
 TODO (M8+). Live inference stays NOT VERIFIED across all rows.

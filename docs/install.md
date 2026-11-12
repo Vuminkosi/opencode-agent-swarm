@@ -141,15 +141,19 @@ plugin was loaded against a live server in this task (**NOT VERIFIED**).
 
 ## 7. Tests
 
-Tests use Bun's built-in runner. No package defines a `test` script in its
-`package.json`, so invoke `bun test` directly:
+Tests use Bun's built-in runner. Exactly one package defines a `test` script
+(`packages/board-terminal`: `bun test src/__tests__/board.test.ts`); the
+other packages define none, so invoke `bun test` directly for those:
 
 ```powershell
 # Whole repo (from the repo root):
 bun test
 
-# Single package (example):
+# Single package without its own `test` script (example):
 bun test packages/runtime
+
+# The one package-scoped script:
+bun run --cwd packages/board-terminal test
 ```
 
 Test files live beside their sources (for example
