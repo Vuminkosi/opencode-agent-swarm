@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "src",
+    "types": ["bun-types"],
+    "typeRoots": ["../../node_modules/.bun/bun-types@1.4.4/node_modules"]
+  },
+  "include": ["src/**/*.ts"]
+}

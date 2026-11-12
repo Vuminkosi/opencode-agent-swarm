@@ -1,0 +1,19 @@
+{
+  "name": "@opencode-swarm/board-terminal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "M6-02 standalone Bun terminal board: chronological public stream, roster, mentions, follow/history/filtering, delivery/wake status, tasks/verifier/monitor/usage — zero inference, daemon-state reconnect.",
+  "exports": {
+    ".": "./src/board.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test src/__tests__/board.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "bun-types": "1.4.4",
+    "typescript": "5.9.2"
+  }
+}
