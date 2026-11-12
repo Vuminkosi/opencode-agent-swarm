@@ -3,7 +3,7 @@
 > **Document status: STUB — no decision is made in this file.**
 > This stub scopes the decision for the master orchestrator, which owns
 > release authority. Do not treat any PASS cited here as a release
-> approval. Current value: **`decision: UNDECIDED-PENDING-MASTER`**. [DESIGN]
+> approval. Current value: **`decision: RELEASE_CANDIDATE_BLOCKED (Option A)`**. [DESIGN]
 
 - **Canonical repo:** `C:\DevOps\opencode-agent-swarm`
 - **Candidate commits:** `7d4d79b` (M8-CODE-COMMIT-01) → `2cae97b` (DOC-M8-COMMIT-01) → `895316a` (M8-FIX-COMMIT-01, HEAD). [PROBE]
@@ -36,12 +36,12 @@ Full per-gate table: [m8 release qualification §10.5](../evidence/m8-release-qu
 ## Decision record (master only)
 
 ```text
-decision: UNDECIDED-PENDING-MASTER
-decided-by: <master orchestrator signature>
-decided-at: <date>
-selected-option: <A / B / C>
-waived-gates (B only): <gate IDs + rationale + expiry>
-evidence-logs: <fresh-install smoke/E2E log, live probe logs, suite re-run logs>
+decision: RELEASE_CANDIDATE_BLOCKED
+decided-by: OpenCode Engineering Orchestrator (master)
+decided-at: 2026-11-12
+selected-option: A — No release (RELEASE_CANDIDATE_BLOCKED; M8 stays implementation-complete, release-unproven)
+waived-gates (B only): N/A — no waiver granted under Option A
+evidence-logs: deterministic gates PASS — frozen install exit 0 (274 installs, no changes); full suite 514 pass / 0 fail / 14054 expects / 36 files at 895316a; tsc 9/9 clean; targeted suites green (recovery 19+8 crash-replay, rate-limit 35+4, path-policy 55, worktree 30, plugin 51+22, adapter-codex 9 + bridge Tier-A 50, board 34, m1 e2e 6/6 SKIP-with-zero-inference); independent reviews complete (code/security/integration/integrity/compat/dependency/test), 0 S0/S1, S2s closed or accepted-residual with revisit conditions. Live gates BLOCKED — no authorized paid inference this program (SWARM_ALLOW_LIVE_INFERENCE gate closed at every live attempt; user explicitly forbade paid inference); LIVE-PROBE-02 reached 12/13 proofs then provider 402 Insufficient balance with $0.00 spend and zero retries, so successful wake-triggered model turns + 402-shape live proof + live TUI mount + live contention remain NOT VERIFIED. Resumption: set SWARM_ALLOW_LIVE_INFERENCE=1 with funded quota, rerun identical harness flags (--max-turns 6 --timeout-ms 300000 --max-cost-usd 0.50) + live TUI mount via supported APIs + full suite re-run at that HEAD.
 ```
 
-No agent below the master may edit this record. The documentation lane leaves it `UNDECIDED-PENDING-MASTER` and dirty in the working tree for master review — never staged, never committed by this lane. [DESIGN]
+Decision recorded as `RELEASE_CANDIDATE_BLOCKED` by the OpenCode Engineering Orchestrator (master) on 2026-11-12, superseding the `UNDECIDED-PENDING-MASTER` state. No agent below the master may edit this record — the documentation lane leaves it dirty in the working tree for master review, never staged, never committed by this lane. [DESIGN]
