@@ -6,9 +6,9 @@
  * - Double-teardown is a no-op: second call resolves without disposing again.
  * - A failing dispose must not skip the remaining registrations.
  *
- * Uses a minimal fake plugin context: only `command.transform` and
- * `tool.transform` are exercised by setup, each returning a controllable
- * registration in call order.
+ * Uses a minimal fake plugin context: `command.transform`, `tool.transform`,
+ * and `rpc.register` are exercised by setup (M6-03 added the versioned RPC
+ * registration), each returning a controllable registration in call order.
  */
 // @ts-ignore - bun:test types are provided by the Bun runtime (bun-types not installed); runtime import only.
 import { describe, expect, test } from "bun:test";
@@ -31,6 +31,7 @@ function fakeContext(registrations: FakeRegistration[]): SetupContext {
   return {
     command: { transform },
     tool: { transform },
+    rpc: { register: transform },
   } as unknown as SetupContext;
 }
 
@@ -46,14 +47,15 @@ describe("swarm plugin teardown", () => {
     const teardown = await setupTeardown([
       { dispose: async () => void disposed.push("command") },
       { dispose: async () => void disposed.push("tool") },
+      { dispose: async () => void disposed.push("rpc") },
     ]);
 
     await teardown();
-    // Reverse order: tool registration was pushed last, disposed first.
-    expect(disposed).toEqual(["tool", "command"]);
+    // Reverse order: rpc registration was pushed last, disposed first.
+    expect(disposed).toEqual(["rpc", "tool", "command"]);
 
     await teardown();
-    expect(disposed).toEqual(["tool", "command"]);
+    expect(disposed).toEqual(["rpc", "tool", "command"]);
   });
 
   test("a failing dispose still disposes the remainder and aggregates the error", async () => {
@@ -67,6 +69,7 @@ describe("swarm plugin teardown", () => {
           throw failure;
         },
       },
+      { dispose: async () => void disposed.push("rpc") },
     ]);
 
     let caught: unknown = null;
@@ -78,10 +81,10 @@ describe("swarm plugin teardown", () => {
     expect(caught).toBeInstanceOf(AggregateError);
     expect((caught as AggregateError).errors).toEqual([failure]);
     // Remainder still disposed despite the failure (reverse order).
-    expect(disposed).toEqual(["tool", "command"]);
+    expect(disposed).toEqual(["rpc", "tool", "command"]);
 
     // List was cleared via finally: second teardown is a no-op, not a rethrow.
     await teardown();
-    expect(disposed).toEqual(["tool", "command"]);
+    expect(disposed).toEqual(["rpc", "tool", "command"]);
   });
 });

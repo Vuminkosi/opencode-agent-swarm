@@ -3,10 +3,21 @@
  *
  * Speaks ONLY versioned daemon routes (contract C-DAEMON-01):
  * - `GET /healthz` (unauthenticated liveness, `{status,schemaVersion,protocolVersion}`)
- * - `GET /v1/swarms/:id`, `POST /v1/swarms`, `POST /v1/swarms/:id/members`,
+ * - `GET /v1/swarms/:id` (snapshot: swarm + members + tasks)
+ * - `POST /v1/swarms`, `POST /v1/swarms/:id/members`,
  *   `POST /v1/swarms/:id/tasks`, `POST /v1/swarms/:id/posts`,
  *   `GET /v1/swarms/:id/posts?after=&limit=`,
  *   `POST /v1/swarms/:id/pause|resume|cancel`
+ *
+ * M6-01 read projections (still versioned-only, zero inference):
+ * - `snapshot` serves status/agents/board-roster reads from SQLite.
+ * - `listPosts` serves board replay (`posts?after=&limit=`).
+ * - `listMembers`/`listTasks` are snapshot-derived projections — they issue
+ *   the same versioned `GET /v1/swarms/:id` and slice members/tasks
+ *   client-side, so no new daemon route was invented for them.
+ * - `wakes`/`usage` have NO versioned daemon route and are NOT fetched:
+ *   see `UNSUPPORTED_DAEMON_READS`. Inventing an unversioned path would
+ *   violate C-DAEMON-01; a contract amendment must add the route first.
  *
  * Any path outside `/healthz` + `/v1/` is rejected client-side so the
  * plugin can never drift onto an unversioned route. Errors surface the
@@ -17,6 +28,20 @@
 
 export const DAEMON_API_PREFIX = "/v1/" as const;
 export const DAEMON_HEALTH_PATH = "/healthz" as const;
+
+/**
+ * M6-01 unsupported daemon reads (fallback, never speculative).
+ *
+ * The daemon exposes no versioned route for wake intents or the usage
+ * ledger, so the plugin MUST NOT fetch them — an invented `/v1/...`
+ * path would be a speculative hook outside C-DAEMON-01. A contract
+ * amendment adding the route comes first (M6-03+); until then callers
+ * serve status/agents/board from `snapshot` + `listPosts` only.
+ */
+export const UNSUPPORTED_DAEMON_READS = [
+  "wakes: no versioned daemon route exposes wake intents; not fetched (contract amendment required).",
+  "usage: no versioned daemon route exposes the usage ledger; not fetched (contract amendment required).",
+] as const;
 
 export interface SwarmSummary {
   readonly id: string;
@@ -166,6 +191,26 @@ export class SwarmDaemonClient {
   listPosts(swarmId: string, after = 0, limit = 100): Promise<{ posts: PostSummary[]; after: number }> {
     const query = `after=${encodeURIComponent(String(after))}&limit=${encodeURIComponent(String(limit))}`;
     return this.request(`/v1/swarms/${encodeURIComponent(swarmId)}/posts?${query}`, { auth: true });
+  }
+
+  /**
+   * M6-01 members projection for `/swarm agents`: snapshot-derived, served
+   * from the versioned `GET /v1/swarms/:id` route (no new daemon route,
+   * zero model inference).
+   */
+  async listMembers(swarmId: string): Promise<{ members: readonly MemberSummary[] }> {
+    const { members } = await this.snapshot(swarmId);
+    return { members };
+  }
+
+  /**
+   * M6-01 tasks projection for status-class reads: snapshot-derived, served
+   * from the versioned `GET /v1/swarms/:id` route (no new daemon route,
+   * zero model inference).
+   */
+  async listTasks(swarmId: string): Promise<{ tasks: readonly TaskSummary[] }> {
+    const { tasks } = await this.snapshot(swarmId);
+    return { tasks };
   }
 
   pauseSwarm(swarmId: string): Promise<{ swarm: SwarmSummary }> {
