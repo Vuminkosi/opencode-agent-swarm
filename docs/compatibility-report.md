@@ -409,3 +409,49 @@ One untracked junk file `NUL` sits at the repo root; it is in neither M6 commit,
 2. Focused/typecheck counts (51 + 34, `tsc × 2`) are supplied evidence cited in [m6-parity-ux](evidence/m6-parity-ux.md), not fresh executions of this doc session (link check only). [PROBE]
 3. Exactly-once physical delivery is not claimed; ambiguous admissions quarantine for operator review by design. [DESIGN]
 4. No live-server, screenshot, deployment, endpoint, CLI-flag, release, or support-promise claims are made in this addendum. [DESIGN]
+
+## 12. M7 scale/codex compatibility addendum (DOC-M7-01)
+
+> **Document status for this section only: APPROVED CONTRACT + IMPLEMENTED
+> (FakeHarness + tmp-Git/tmp-SQLite/disposable-tmp simulations, supplied) /
+> COMMITTED at `9111c4a`.** Live-server and live-inference behavior remain
+> **NOT VERIFIED**. §§1–11 above are unchanged M0/M2/M3/M4/M5/M6 baseline;
+> nothing below rewrites them. [DESIGN]
+
+- **Baseline:** HEAD `9111c4a465de9469f2f8011124eac1dc0c301c33` —
+  `feat(m7): scale validation suite + bench and Codex fail-closed probe (M7-CODE-COMMIT-01)`; 8 files, 1859 insertions, zero deletions.
+  Prior: `ccf0db6` (M6 board lane) → `f7237bf` (DOC-M6-01) → `9111c4a` (M7, HEAD). [PROBE]
+- **Constraint compliance:** M0–M6 files untouched; **no migration file** (no `.sql` file in the commit — service-owned ensures precedent carried); **no protocol change** (no `packages/protocol` file in the commit); **no OpenCode default change** (bridge Tier-A surface untouched, `OpenCodeHarness`/`backend: "opencode"` unshadowed). [DESIGN]
+- **Evidence:** 10 scale + 5 fault-injection + 9 Codex fail-closed rows PASS (FakeHarness/tmp-Git/tmp-SQLite, supplied), bench gates supplied, `tsc × 2` + adapter `typecheck` clean (supplied); live inference NOT VERIFIED — see [m7-scale-codex evidence](evidence/m7-scale-codex.md) §§2–5/7 for the per-acceptance map and honest repro scope. [PROBE]
+
+### 12.1 No new OpenCode APIs assumed [DESIGN]
+
+| Surface | Status in M7 |
+|---|---|
+| OpenCode harness / session / model surface | Unchanged by M7. The scale lane reuses the frozen M1-03 engine import-only; the Codex lane type-checks against the M1-03 `CodingHarness` port shape but performs zero native calls — every method throws `CodexNotImplementedError`. No new native method, event, permission, or model ref assumed. [DESIGN] — IMPLEMENTED-stub, live transport behavior NOT VERIFIED |
+| Codex CLI / SDK surface | Resolve-only: CLI `0.167.0` present, SDK `0.167.2` metadata resolved without install. Verbs enumerated locally (`thread/*`, `turn/start`/`steer`/`interrupt`, `model/list`); no `switchAgent`, snapshot, or permission-rules equivalent confirmed; `app-server` explicitly `[experimental]`. Fail-closed stub per §4 of the evidence file — no turn submitted without resolved stable verbs. [DESIGN] |
+| OpenCode default path | Untouched: `adapter-codex` exports no `OpenCodeHarness`/default-harness symbol and registers nothing globally; discriminator is exactly `"codex"`. Bridge Tier-A 50 still PASS (carried, supplied). [DESIGN] — IMPLEMENTED, live default behavior NOT VERIFIED |
+| Live probes 01–12 | Still NOT VERIFIED — no `probe-NN.log` exists in the repo. M7 simulations close no live probe. [PROBE] |
+
+### 12.2 Service-owned ensures vs migrations (compatibility note) [DESIGN]
+
+- The scale suites and bench reuse the M4/M5 service-owned ensure precedent (idempotent `CREATE TABLE IF EXISTS` ensures on shared/file DB handles, `integration_runs`/`leases` rows) — no new `.sql` migration file is added, because an unwired file would be dead schema while `store.ts` migrations are owned by another lane. [DESIGN] — IMPLEMENTED
+- Bench report JSON goes to a disposable `mkdtemp` dir under the OS tmp dir only; no canonical or user-project writes by construction. [DESIGN] — IMPLEMENTED
+
+### 12.3 Bound notes (no unbounded behavior introduced) [DESIGN]
+
+- Scheduler drain, wake dispatch, post append/resync, contention interleavings, and 4-way integrates are all bounded loops over fixed N with deterministic FakeHarness admission (no retries against live transports, no inference spend). Quota path stays one-attempt/never-retry (M2 carry). [DESIGN] — IMPLEMENTED, live timing behavior NOT VERIFIED
+- Bench RSS delta (+0.1–0.2MB supplied) and hardware-dependent timings are machine-local observations, not compatibility guarantees. [PROBE]
+
+### 12.4 Residual list + carry [DESIGN/PROBE]
+
+- **S2 dispositions: accepted hardening follow-ups, non-blocking** (supplied M7-01/02 review disposition — no finding IDs invented here). [PROBE]
+- **F-04 (harness 402-shape): NOT VERIFIED (carried, not closed).** M7 adds no inference path and no paid-service call; the M2 quota posture is carried unchanged. [PROBE]
+
+### 12.5 M7 gaps and NOT VERIFIED list (additive to §§5/7.3/8.3/9.5/10.5/11.5)
+
+1. Live inference/spend, live server turns, live contention timing, provider 402 shaping, and bench hardware dependence are NOT VERIFIED (no live server, no inference spend). [PROBE]
+2. Focused/carried/typecheck/bench counts (10 + 5 + 9 rows, carried 35 + 4 + priors, `tsc × 2` + adapter typecheck, bench §3 figures) are supplied evidence cited in [m7-scale-codex](evidence/m7-scale-codex.md), not fresh executions of this doc session (link check only). [PROBE]
+3. Codex transport is honestly unbuilt — four gating questions open; no stable-verb, session-identity, model-mapping, or snapshot claim is made. [DESIGN]
+4. Exactly-once physical delivery is not claimed; ambiguous admissions quarantine for operator review by design. [DESIGN]
+5. No live-server, screenshot, deployment, endpoint, CLI-flag, release, or support-promise claims are made in this addendum. [DESIGN]
