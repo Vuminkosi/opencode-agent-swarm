@@ -6,6 +6,12 @@
  *   (backpressure: overflow rejects the newcomer, never drops committed work).
  * - 429 (rate limited) → bounded exponential backoff with full jitter +
  *   retry budget, then terminal exhaustion (no unbounded storm).
+ *   Digit-guarded status matching (M8-01): bare-substring checks would
+ *   confuse `14029`/`4021` with real 429/402 codes — every numeric-code
+ *   match is anchored on non-digit boundaries.
+ * - Timeout handling (M8-01): a configured per-attempt deadline
+ *   (`timeoutMs`) turns a hung transport into a bounded transient failure
+ *   (same retry budget, never unbounded); unset means no deadline.
  * - 402 (quota exhausted) → quota-paused, zero retries. Attempts frozen,
  *   eligible-list exclusion is the store's `quota_paused` member state, and
  *   resume happens only on documented triggers (new post / model switch /
@@ -46,7 +52,12 @@ export type ProviderOutcomeClass =
 
 /** Classify a transport status/code into its M5 outcome class. Unknown and
  *  5xx/timeout shapes are transient (M2 bounded-backoff domain); any other
- *  4xx is permanent (fail closed). */
+ *  4xx is permanent (fail closed). String statuses match on digit-guarded
+ *  tokens (M8-01): `14029` or `error 4021` must NOT classify as 429/402.
+ *  Numeric/string agreement (M8-01-FIX-01 F-M8-04): `408`/`502`/`503`/`504`
+ *  are transient whether they arrive as numbers or as digit-guarded string
+ *  tokens (`"503"`, `"HTTP 503 Service Unavailable"`); any other 4xx string
+ *  is permanent, 5xx strings are transient. */
 export function classifyProviderStatus(status: unknown): ProviderOutcomeClass {
   if (isQuotaStatus(status)) return "quota";
   if (isAuthBlockedStatus(status)) return "auth-blocked";
@@ -58,6 +69,10 @@ export function classifyProviderStatus(status: unknown): ProviderOutcomeClass {
     return "permanent";
   }
   if (typeof status === "string") {
+    if (QUOTA_STATUS_TOKEN.test(status)) return "quota";
+    if (AUTH_STATUS_TOKEN.test(status)) return "auth-blocked";
+    if (RATE_STATUS_TOKEN.test(status)) return "rate-limited";
+    if (TRANSIENT_STATUS_TOKEN.test(status)) return "transient";
     if (/ECONNRESET|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|FETCH_TIMEOUT|TIMEOUT|ABORT/i.test(status)) {
       return "transient";
     }
@@ -77,20 +92,47 @@ export function classifyProviderStatus(status: unknown): ProviderOutcomeClass {
  *  fallback, so status-less auth can never be retried ×3 as transient. */
 const AUTH_CODE_PATTERN =
   /UNAUTHENTICATED|PERMISSION_DENIED|UNAUTHORIZED|FORBIDDEN|ACCESS[_-\s]?DENIED|INVALID[_-\s]?API[_-\s]?KEY|TOKEN[_-\s]?EXPIRED|AUTH[_-\s]?FAILED|INVALID[_-\s]?TOKEN/i;
+/**
+ * M8-01 digit-guarded numeric tokens: the code/message must carry the code
+ * as a standalone number, never as a digit-run substring. `14029` is not
+ * 429, `error 4021` is not 402, `x401b` IS 401 (letter boundaries count).
+ */
 const AUTH_STATUS_TOKEN = /(^|[^0-9])(401|403)([^0-9]|$)/;
+const QUOTA_STATUS_TOKEN = /(^|[^0-9])402([^0-9]|$)/;
+const RATE_STATUS_TOKEN = /(^|[^0-9])429([^0-9]|$)/;
+/**
+ * M8-01-FIX-01 (F-M8-04) digit-guarded transient tokens: `408`/`502`/`503`/
+ * `504` arrive as strings from some transports (`"503"`, `"HTTP 503 …"`).
+ * They are transient exactly like their numeric twins — but only as
+ * standalone numbers, never as digit-run substrings (`"error 5021"` is
+ * permanent, not transient).
+ */
+const TRANSIENT_STATUS_TOKEN = /(^|[^0-9])(408|502|503|504)([^0-9]|$)/;
 
 export function classifyTransportError(err: unknown): ProviderOutcomeClass {
   if (typeof err === "object" && err !== null) {
     const rec = err as { status?: unknown; code?: unknown; message?: unknown };
-    if (rec.status !== undefined) return classifyProviderStatus(rec.status);
+    // M8-01-FIX-01 (F-M8-02): only a REAL status (number|string) routes by
+    // status. A null (or otherwise non-status) `.status` with an auth-bearing
+    // `.code`/message (e.g. `{status: null, code: "UNAUTHENTICATED"}`) must
+    // fall through to the code+message auth checks below — never land on
+    // `transient` with a full retry budget.
+    if (typeof rec.status === "number" || typeof rec.status === "string") {
+      return classifyProviderStatus(rec.status);
+    }
     const code = typeof rec.code === "string" ? rec.code : "";
-    if (/quota/i.test(code) || /402/.test(code)) return "quota";
+    if (/quota/i.test(code) || QUOTA_STATUS_TOKEN.test(code)) return "quota";
     if (code === "401" || code === "403") return "auth-blocked";
     if (AUTH_CODE_PATTERN.test(code) || AUTH_STATUS_TOKEN.test(code)) return "auth-blocked";
-    if (code === "429" || /rate.?limit|too.?many.?requests/i.test(code)) return "rate-limited";
+    if (code === "429" || RATE_STATUS_TOKEN.test(code) || /rate.?limit|too.?many.?requests/i.test(code)) {
+      return "rate-limited";
+    }
     const message = typeof rec.message === "string" ? rec.message : "";
-    if (/quota/i.test(message) || /402/.test(message)) return "quota";
+    if (/quota/i.test(message) || QUOTA_STATUS_TOKEN.test(message)) return "quota";
     if (AUTH_CODE_PATTERN.test(message) || AUTH_STATUS_TOKEN.test(message)) return "auth-blocked";
+    if (RATE_STATUS_TOKEN.test(message) || /rate.?limit|too.?many.?requests/i.test(message)) {
+      return "rate-limited";
+    }
   }
   return "transient";
 }
@@ -125,6 +167,12 @@ export interface RateLimiterPolicy {
   readonly backoffCapMs?: number;
   /** Retry budget for 429/transient ONLY (quota/auth never retry). */
   readonly maxAttempts?: number;
+  /**
+   * M8-01 per-attempt transport deadline in ms. When set (> 0, finite), a
+   * hung transport is failed as a bounded transient timeout (same retry
+   * budget, never unbounded); when unset, attempts have no deadline.
+   */
+  readonly timeoutMs?: number;
   readonly sleep?: (ms: number) => Promise<void>;
   readonly random?: () => number;
 }
@@ -182,6 +230,7 @@ export class RateLimiter {
   private readonly backoffBaseMs: number;
   private readonly backoffCapMs: number;
   private readonly maxAttempts: number;
+  private readonly timeoutMs: number | undefined;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly random: () => number;
 
@@ -198,6 +247,9 @@ export class RateLimiter {
     this.backoffBaseMs = policy?.backoffBaseMs ?? DEFAULT_BACKOFF_BASE_MS;
     this.backoffCapMs = policy?.backoffCapMs ?? DEFAULT_BACKOFF_CAP_MS;
     this.maxAttempts = Math.max(1, Math.floor(policy?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS));
+    const timeoutRaw = policy?.timeoutMs;
+    this.timeoutMs =
+      timeoutRaw !== undefined && Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? timeoutRaw : undefined;
     this.sleep = policy?.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.random = policy?.random ?? Math.random;
   }
@@ -352,9 +404,45 @@ export class RateLimiter {
   }
 
   /**
+   * Run one transport attempt under the configured deadline (when any).
+   * A deadline breach rejects with a NATIVELY transient shape
+   * (`code: "ETIMEDOUT"`, timeout-bearing message, no status/auth/quota
+   * markers) so classification can only ever yield bounded transient
+   * retries — a hung transport can never masquerade as quota/auth, and a
+   * NaN/negative/omitted timeout disables the deadline (fail open to the
+   * legacy no-deadline behavior, retries still bounded by maxAttempts).
+   *
+   * M8-01-FIX-01 (F-M8-05) reject-not-cancel: the deadline REJECTS the
+   * race — it does NOT cancel the underlying transport (no AbortController
+   * is wired, the hung promise is left to settle on its own and its late
+   * settlement is ignored after `finally` clears the timer). The slot stays
+   * held across backoff, so an uncooperative transport can never widen into
+   * extra concurrency while its replacement retries.
+   */
+  private runAttempt<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.timeoutMs === undefined) return fn();
+    const deadlineMs = this.timeoutMs;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          Object.assign(new Error(`transport deadline exceeded after ${deadlineMs}ms (TIMEOUT, no inference)`), {
+            code: "ETIMEDOUT",
+          }),
+        );
+      }, deadlineMs);
+    });
+    return Promise.race([fn(), deadline]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+    });
+  }
+
+  /**
    * Run `fn` under the per-key semaphore with M5 failure discipline:
    * - 429/transient → bounded exp-backoff retries (budget `maxAttempts`
-   *   total attempts), then terminal — no unbounded storm.
+   *   total attempts), then terminal — no unbounded storm. Transport
+   *   timeouts (deadline breach or timeout-shaped errors) are transient
+   *   members of this budget.
    * - 402 quota → `quota-paused`, exactly one transport attempt, zero retry.
    * - 401/403 auth → `auth-blocked`, exactly one attempt, zero retry
    *   (never auto-approved). Status-less auth shapes (auth-bearing code or
@@ -380,7 +468,7 @@ export class RateLimiter {
       for (;;) {
         attempts += 1;
         try {
-          const value = await fn();
+          const value = await this.runAttempt(fn);
           return { status: "ok", value, attempts, delaysMs };
         } catch (err) {
           const outcome = classifyTransportError(err);

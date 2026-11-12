@@ -26,7 +26,9 @@
  *   `integration_runs` `task_id PRIMARY KEY` dedupe (M4-03), reused here.
  * - Bounded redelivery (rate limiting): every replay pass takes at most
  *   `maxPerRun` rows (default 100, hard cap 1000) in `created_at` order —
- *   no unbounded fan-out on a deep backlog.
+ *   no unbounded fan-out on a deep backlog. The store READ per pass is
+ *   additionally scan-bounded by `REPLAY_SCAN_CAP` (M8-01, documented
+ *   value 2000): a >10k-row backlog drains across bounded passes.
  * - Quota pause respected by construction: this service owns no paid path
  *   (no harness calls, no inference); paid turns stay with the dispatcher,
  *   which quota-pauses on 402 with zero auto-retry.
@@ -125,6 +127,16 @@ export interface ReplayReport {
   readonly failed: number;
   readonly deliveredIds: readonly string[];
   readonly failedIds: readonly string[];
+  /**
+   * M8-01 scan bound (per-fetch bound, F-M8-01): the rows READ from the store
+   * by the widest single fetch of this pass (global window, before swarm
+   * filtering). Every fetch in a pass re-reads from the head of the pending
+   * outbox and is individually `<= REPLAY_SCAN_CAP`, so earlier narrower
+   * probes are subsumed by the final window — `scanned` is always
+   * `<= REPLAY_SCAN_CAP`. Unfiltered passes are single-fetch, so
+   * `scanned == checked <= maxPerRun`.
+   */
+  readonly scanned: number;
 }
 
 export interface BoardSnapshot {
@@ -150,6 +162,19 @@ export interface CrashRecoveryOptions {
 
 const REPLAY_DEFAULT_MAX = 100;
 const REPLAY_HARD_CAP = 1000;
+
+/**
+ * M8-01 scan bound (M5 F-01 accepted risk, closed here): a single replay
+ * pass READS at most this many outbox rows from the store, no matter how
+ * deep the backlog is. Delivery per pass stays capped by `maxPerRun`
+ * (<= REPLAY_HARD_CAP); the scan window that feeds the per-swarm filter
+ * grows geometrically but never past this cap, so a >10k-row backlog
+ * costs a bounded read per pass and drains across passes instead of one
+ * widening scan. Value: 2000 rows/pass (2x the delivery hard cap, small
+ * enough to stay cheap on file DBs, large enough that an unfiltered pass
+ * always covers its delivery quota in one fetch).
+ */
+export const REPLAY_SCAN_CAP = 2000;
 
 function nowIsoDefault(): string {
   return new Date().toISOString();
@@ -283,10 +308,14 @@ export class CrashRecovery {
    * The `outbox` table itself is store-owned and global (no swarm_id
    * column — store.ts is another lane), so recovery scopes by resolving
    * each row's aggregate: post_committed carries swarmId; wake lifecycle
-   * rows resolve via wake id; evidence rows resolve via task id. Unknown
-   * kinds or vanished aggregates resolve to null and are excluded from
-   * filtered replays (never leaked cross-swarm) but included in unfiltered
-   * legacy replays.
+   * rows resolve via wake id; evidence rows resolve via task id.
+   *
+   * M8-01-FIX-01 (F2) NULL-swarm quarantine: unknown kinds or vanished
+   * aggregates resolve to null and are EXCLUDED from filtered (per-swarm)
+   * replays — never leaked cross-swarm — but INCLUDED in unfiltered legacy
+   * replays so nothing is lost (proven by the NULL-swarm quarantine row:
+   * filtered pass reports checked 0 and preserves the row, the unfiltered
+   * pass redelivers it).
    */
   private outboxEntrySwarm(entry: OutboxEntry): string | null {
     const payload = (entry.payload ?? {}) as Record<string, unknown>;
@@ -324,10 +353,19 @@ export class CrashRecovery {
    * restart pass, or operator action, redrives it).
    * F-D3: pass `swarmId` to replay exactly one swarm's backlog (two swarms
    * sharing one store file never cross-deliver). The scan stays bounded per
-   * pass (at most `maxPerRun` deliveries): the global fetch pages/expands
-   * until the swarm quota is filled or the source is exhausted, so an
-   * other-swarm backlog ahead of the window can never starve this swarm
-   * (M5-01-FIX-02 F2). Unfiltered calls preserve the legacy global behavior.
+   * pass (at most `maxPerRun` deliveries; at most REPLAY_SCAN_CAP rows
+   * read): the global fetch pages/expands until the swarm quota is filled,
+   * the source is exhausted, or the scan cap is reached — an other-swarm
+   * backlog ahead of the window can delay but never unboundedly widen this
+   * swarm's pass (M5-01-FIX-02 F2, scan-bounded by M8-01). Unfiltered calls
+   * preserve the legacy global behavior.
+   *
+   * M8-01-FIX-01 (F1) filtered fairness is best-effort: a large other-swarm
+   * backlog ahead of the window can starve one pass (fewer than `maxPerRun`
+   * rows, possibly zero) without widening the scan. Callers draining one
+   * swarm must keep redriving as the global backlog drains — full eventual
+   * redelivery is proven by draining across passes, never by widening one
+   * pass.
    */
   async replayOutbox(
     consumer: OutboxConsumer,
@@ -338,21 +376,27 @@ export class CrashRecovery {
     const max = Math.max(1, Math.min(REPLAY_HARD_CAP, Math.floor(Number.isFinite(rawMax) ? rawMax : REPLAY_DEFAULT_MAX)));
     const swarmId = opts?.swarmId !== undefined ? opts.swarmId.trim() : "";
     let pending: OutboxEntry[];
+    let scanned: number;
     if (swarmId === "") {
       pending = this.store.listPendingOutbox(max);
+      scanned = pending.length;
     } else {
       // F2 paged predicate push-down (store lane owns listPendingOutbox, so
       // no offset param exists): grow the global window until the swarm
-      // quota is filled or the source is exhausted (fetched < window means
-      // no more rows exist). Only the filtered quota is delivered per pass.
-      let window = max * 5;
+      // quota is filled, the source is exhausted (fetched < window means
+      // no more rows exist), or the M8-01 scan cap is reached. Only the
+      // filtered quota is delivered per pass; the remainder (including an
+      // other-swarm backlog past the cap) redrives on later passes as the
+      // global backlog drains — bounded scan, full eventual redelivery.
+      let window = Math.min(max * 5, REPLAY_SCAN_CAP);
       let fetched = this.store.listPendingOutbox(window);
       let filtered = fetched.filter((entry) => this.outboxEntrySwarm(entry) === swarmId);
-      while (filtered.length < max && fetched.length >= window) {
-        window *= 2;
+      while (filtered.length < max && fetched.length >= window && window < REPLAY_SCAN_CAP) {
+        window = Math.min(window * 2, REPLAY_SCAN_CAP);
         fetched = this.store.listPendingOutbox(window);
         filtered = fetched.filter((entry) => this.outboxEntrySwarm(entry) === swarmId);
       }
+      scanned = fetched.length;
       pending = filtered.slice(0, max);
     }
     const deliveredIds: string[] = [];
@@ -369,7 +413,7 @@ export class CrashRecovery {
       this.store.markOutboxDelivered(entry.id);
       deliveredIds.push(entry.id);
     }
-    return { checked: pending.length, delivered: deliveredIds.length, failed: failedIds.length, deliveredIds, failedIds };
+    return { checked: pending.length, delivered: deliveredIds.length, failed: failedIds.length, deliveredIds, failedIds, scanned };
   }
 
   /**

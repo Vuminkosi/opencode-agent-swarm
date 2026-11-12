@@ -84,23 +84,73 @@ export interface DispatchResult {
   readonly detail?: string;
 }
 
-function isQuotaError(err: unknown): boolean {
+/**
+ * M8-01-FIX-01 (F-M8-03) parity with the rate-limiter: digit-guarded numeric
+ * tokens — a code/message must carry the code as a standalone number, never
+ * as a digit-run substring. Bare-substring `/402/` reads `14029` as quota
+ * (the limiter correctly calls it transient); the anchored tokens below keep
+ * both classifiers in agreement. Duplicated here (tiny, no paid-path import
+ * of the limiter); parity is asserted by the M8-01-FIX-01 parity rows.
+ */
+const DISPATCH_QUOTA_TOKEN = /(^|[^0-9])402([^0-9]|$)/;
+const DISPATCH_AUTH_TOKEN = /(^|[^0-9])(401|403)([^0-9]|$)/;
+const DISPATCH_TRANSIENT_TOKEN = /(^|[^0-9])(408|429|502|503|504)([^0-9]|$)/;
+const DISPATCH_AUTH_CODE =
+  /UNAUTHENTICATED|PERMISSION_DENIED|UNAUTHORIZED|FORBIDDEN|ACCESS[_-\s]?DENIED|INVALID[_-\s]?API[_-\s]?KEY|TOKEN[_-\s]?EXPIRED|AUTH[_-\s]?FAILED|INVALID[_-\s]?TOKEN/i;
+
+export function isQuotaError(err: unknown): boolean {
   if (err instanceof ProtocolError) return false;
   const withStatus = err as { status?: unknown; code?: unknown; message?: unknown };
   if (withStatus.status === 402) return true;
+  if (typeof withStatus.status === "string" && DISPATCH_QUOTA_TOKEN.test(withStatus.status)) return true;
   const code = typeof withStatus.code === "string" ? withStatus.code : "";
   const message = typeof withStatus.message === "string" ? withStatus.message : "";
-  return /quota/i.test(code) || /quota/i.test(message) || /402/.test(code);
+  return (
+    /quota/i.test(code) ||
+    /quota/i.test(message) ||
+    DISPATCH_QUOTA_TOKEN.test(code) ||
+    DISPATCH_QUOTA_TOKEN.test(message)
+  );
 }
 
-function isTransientError(err: unknown): boolean {
+/**
+ * Auth shapes (401/403, auth-bearing codes/messages) never retry: the
+ * dispatcher maps them to `failed-permanent` (one attempt, zero retries),
+ * in agreement with the limiter's `auth-blocked`. Exported for the
+ * M8-01-FIX-01 parity rows (test/evidence hook, like `maxObserved`).
+ */
+export function isDispatchAuthError(err: unknown): boolean {
   if (err instanceof ProtocolError) return false;
+  const withStatus = err as { status?: unknown; code?: unknown; message?: unknown };
+  if (withStatus.status === 401 || withStatus.status === 403) return true;
+  if (typeof withStatus.status === "string") {
+    if (DISPATCH_AUTH_TOKEN.test(withStatus.status) || DISPATCH_AUTH_CODE.test(withStatus.status)) return true;
+  }
+  const code = typeof withStatus.code === "string" ? withStatus.code : "";
+  if (DISPATCH_AUTH_CODE.test(code) || DISPATCH_AUTH_TOKEN.test(code)) return true;
+  const message = typeof withStatus.message === "string" ? withStatus.message : "";
+  return DISPATCH_AUTH_CODE.test(message) || DISPATCH_AUTH_TOKEN.test(message);
+}
+
+export function isTransientError(err: unknown): boolean {
+  if (err instanceof ProtocolError) return false;
+  // Quota/auth never retry: quota → `quota-blocked`, auth → permanent.
+  if (isQuotaError(err) || isDispatchAuthError(err)) return false;
   const withStatus = err as { status?: unknown; code?: unknown; name?: unknown; message?: unknown };
   if (typeof withStatus.status === "number") {
     const s = withStatus.status as number;
     if (s === 429 || s === 408 || s === 502 || s === 503 || s === 504) return true;
     if (s >= 400 && s < 500) return false;
     if (s >= 500) return true;
+  }
+  if (typeof withStatus.status === "string") {
+    // Numeric/string agreement (F-M8-04 twin): standalone 408/429/502/503/
+    // 504 strings are transient, other 4xx strings are permanent, 5xx
+    // strings are transient — mirroring the numeric branch above.
+    if (DISPATCH_TRANSIENT_TOKEN.test(withStatus.status)) return true;
+    if (/(^|[^0-9])4[0-9]{2}([^0-9]|$)/.test(withStatus.status)) return false;
+    if (/(^|[^0-9])5[0-9]{2}([^0-9]|$)/.test(withStatus.status)) return true;
+    if (/[0-9]/.test(withStatus.status)) return false;
   }
   const code = typeof withStatus.code === "string" ? withStatus.code : "";
   const name = typeof withStatus.name === "string" ? withStatus.name : "";

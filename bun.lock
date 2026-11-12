@@ -8,9 +8,30 @@
         "typescript": "5.9.2",
       },
     },
+    "packages/adapter-codex": {
+      "name": "@opencode-swarm/adapter-codex",
+      "version": "0.0.1",
+    },
     "packages/adapter-opencode": {
       "name": "@opencode-swarm/adapter-opencode",
       "version": "0.0.1",
+    },
+    "packages/board-terminal": {
+      "name": "@opencode-swarm/board-terminal",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/node": "22.10.2",
+        "bun-types": "1.4.4",
+        "typescript": "5.9.2",
+      },
+    },
+    "packages/git-workspaces": {
+      "name": "@opencode-swarm/git-workspaces",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/node": "22.10.2",
+        "bun-types": "1.4.4",
+      },
     },
     "packages/plugin": {
       "name": "@opencode-swarm/plugin",
@@ -35,6 +56,17 @@
       "dependencies": {
         "@opencode-swarm/protocol": "workspace:*",
         "zod": "3.23.8",
+      },
+      "devDependencies": {
+        "@types/node": "22.10.2",
+        "bun-types": "1.4.4",
+      },
+    },
+    "packages/verification": {
+      "name": "@opencode-swarm/verification",
+      "version": "0.1.0",
+      "dependencies": {
+        "@opencode-swarm/protocol": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "22.10.2",
@@ -137,13 +169,21 @@
 
     "@npmcli/run-script": ["@npmcli/run-script@10.0.4", "", { "dependencies": { "@npmcli/node-gyp": "^5.0.0", "@npmcli/package-json": "^7.0.0", "@npmcli/promise-spawn": "^9.0.0", "node-gyp": "^12.1.0", "proc-log": "^6.0.0" } }, "sha512-mGUWr1uMnf0le2TwfOZY4SFxZGXGfm4Jtay/nwAa2FLNAKXUoUwaGwBMNH36UHPtinWfTSJ3nqFQr0091CxVGg=="],
 
+    "@opencode-swarm/adapter-codex": ["@opencode-swarm/adapter-codex@workspace:packages/adapter-codex"],
+
     "@opencode-swarm/adapter-opencode": ["@opencode-swarm/adapter-opencode@workspace:packages/adapter-opencode"],
+
+    "@opencode-swarm/board-terminal": ["@opencode-swarm/board-terminal@workspace:packages/board-terminal"],
+
+    "@opencode-swarm/git-workspaces": ["@opencode-swarm/git-workspaces@workspace:packages/git-workspaces"],
 
     "@opencode-swarm/plugin": ["@opencode-swarm/plugin@workspace:packages/plugin"],
 
     "@opencode-swarm/protocol": ["@opencode-swarm/protocol@workspace:packages/protocol"],
 
     "@opencode-swarm/runtime": ["@opencode-swarm/runtime@workspace:packages/runtime"],
+
+    "@opencode-swarm/verification": ["@opencode-swarm/verification@workspace:packages/verification"],
 
     "@opencode/ai": ["@opencode/ai@2.2.7", "", { "dependencies": { "@aws-sdk/credential-providers": "3.1057.0", "@opencode/schema": "2.2.7", "@smithy/eventstream-codec": "4.2.14", "@smithy/util-utf8": "4.2.2", "aws4fetch": "1.0.20", "effect": "4.1.0", "google-auth-library": "10.5.0" } }, "sha512-okBbQ0w661Y3fCdlHJUQdolJxGU8mts4W7JrmMrm1kuVEa8FideUm0R4jWenN1NqDLnNHLwmWtxMKHMRVG7wNg=="],
 
@@ -517,7 +557,7 @@
 
     "undici": ["undici@8.12.4", "", {}, "sha512-8Mx+uNKKER2bA4AdtedkqRbwUCIJFr2nJckXRe5yrDqzePqwLP7VNcctN8/XdmDSbF7mS+jJKIszlL+vbam1VA=="],
 
-    "undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
+    "undici-types": ["undici-types@6.20.0", "", {}, "sha512-Ny6QZ2Nju20vw1SRHe3d9jVu6gJ+4e3+MMpqu7pqE5HT6WsTSlce++GQmK5UXS8mzV8DSYHrQH+Xrf2jVcuKNg=="],
 
     "util-deprecate": ["util-deprecate@1.0.2", "", {}, "sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw=="],
 
@@ -551,11 +591,11 @@
 
     "@npmcli/promise-spawn/which": ["which@6.0.1", "", { "dependencies": { "isexe": "^4.0.0" }, "bin": { "node-which": "bin/which.js" } }, "sha512-oGLe46MIrCRqX7ytPUf66EAYvdeMIZYn3WaocqqKZAxrBpkqHfL/qvTyJ/bTk5+AqHCjXmrv3CEWgy368zhRUg=="],
 
-    "@types/node/undici-types": ["undici-types@6.20.0", "", {}, "sha512-Ny6QZ2Nju20vw1SRHe3d9jVu6gJ+4e3+MMpqu7pqE5HT6WsTSlce++GQmK5UXS8mzV8DSYHrQH+Xrf2jVcuKNg=="],
-
     "@types/ws/@types/node": ["@types/node@26.6.6", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog=="],
 
     "bun-types/@types/node": ["@types/node@26.6.6", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog=="],
+
+    "bun-types/undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
 
     "minipass-flush/minipass": ["minipass@3.3.6", "", { "dependencies": { "yallist": "^4.0.0" } }, "sha512-DxiNidxSEK+tHG6zOIklvNOwm3hvCrbUrdtzY74U6HKTJxvIDfOUL5W5P2Ghd3DTkhhKPYGqeNUIh5qcM4YBfw=="],
 
@@ -586,6 +626,8 @@
     "@npmcli/git/which/isexe": ["isexe@4.0.0", "", {}, "sha512-FFUtZMpoZ8RqHS3XeXEmHWLA4thH+ZxCv2lOiPIn1Xc7CxrqhWzNSDzD+/chS/zbYezmiwWLdQC09JdQKmthOw=="],
 
     "@npmcli/promise-spawn/which/isexe": ["isexe@4.0.0", "", {}, "sha512-FFUtZMpoZ8RqHS3XeXEmHWLA4thH+ZxCv2lOiPIn1Xc7CxrqhWzNSDzD+/chS/zbYezmiwWLdQC09JdQKmthOw=="],
+
+    "@types/ws/@types/node/undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
 
     "minipass-flush/minipass/yallist": ["yallist@4.0.0", "", {}, "sha512-3wdGidZyq5PB084XLES5TpOSRA3wjXAlIWMhum2kRcv/41Sn2emQ0dycQW4uZXLejwKvg6EsvbdlVL+FYEct7A=="],
 

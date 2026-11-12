@@ -20,7 +20,9 @@ import {
   classifyTransportError,
   computeRateLimitBackoffMs,
   rateLimitKeyFor,
+  type ProviderOutcomeClass,
 } from "../rate-limiter.js";
+import { isDispatchAuthError, isQuotaError as isDispatchQuotaError, isTransientError } from "../wake-dispatcher.js";
 import { UsageLedger, describeTaskAttemptAccounting, ensureUsageLedgerSchema } from "../usage-ledger.js";
 
 function providerError(status: number, code: string): unknown {
@@ -483,6 +485,180 @@ describe("rate limiter M5-02-FIX-02 S2-01: extended auth vocab is zero-retry", (
       "invalid_token",
     ]) {
       expect(classifyTransportError(new Error(message))).toBe("auth-blocked");
+    }
+  });
+});
+
+describe("rate limiter M8-01 hardening: digit-guarded codes, status strings, deadline", () => {
+  test("digit-adjacent lookalikes never classify as quota/auth/rate-limited", () => {
+    // Bare-substring matching would read 402/429 inside these digit runs.
+    expect(classifyTransportError(Object.assign(new Error("x"), { code: "14029" }))).not.toBe("quota");
+    expect(classifyTransportError(Object.assign(new Error("x"), { code: "14029" }))).not.toBe("rate-limited");
+    expect(classifyTransportError(new Error("upstream error 4021, retry later"))).not.toBe("quota");
+    expect(classifyTransportError(new Error("upstream error 4021, retry later"))).not.toBe("auth-blocked");
+    expect(classifyTransportError(new Error("fault 240314 in module 7"))).not.toBe("auth-blocked");
+    expect(classifyTransportError(new Error("fault 240314 in module 7"))).not.toBe("rate-limited");
+    expect(classifyProviderStatus("error 14029 occurred")).not.toBe("rate-limited");
+    expect(classifyProviderStatus("error 14029 occurred")).toBe("permanent");
+    expect(classifyProviderStatus("error 4021 occurred")).not.toBe("quota");
+  });
+
+  test("anchored standalone codes still classify (letters/punctuation boundaries count)", () => {
+    expect(classifyProviderStatus("HTTP 429 Too Many Requests")).toBe("rate-limited");
+    expect(classifyProviderStatus("Error 402 Payment Required")).toBe("quota");
+    expect(classifyProviderStatus("401 Unauthorized")).toBe("auth-blocked");
+    expect(classifyProviderStatus("denied: 403 Forbidden")).toBe("auth-blocked");
+    expect(classifyTransportError(Object.assign(new Error("x"), { code: "ERR_429_RETRY" }))).toBe("rate-limited");
+    expect(classifyTransportError(new Error("failed with 429 after gateway"))).toBe("rate-limited");
+    expect(classifyTransportError(new Error("quota exceeded: 402 for project"))).toBe("quota");
+  });
+
+  test("status-less auth shapes stay auth-blocked with exactly one attempt", async () => {
+    for (const shape of [
+      Object.assign(new Error("bad key (no inference)"), { code: "INVALID_API_KEY" }),
+      new Error("request denied: 403 Forbidden (no inference)"),
+      Object.assign(new Error("expired (no inference)"), { code: "TOKEN_EXPIRED" }),
+    ]) {
+      const limiter = new RateLimiter({ maxAttempts: 5, sleep: () => Promise.resolve(), random: () => 1 });
+      let calls = 0;
+      const res = await limiter.execute(KEY, async (): Promise<string> => {
+        calls += 1;
+        throw shape;
+      });
+      expect(res.status).toBe("auth-blocked");
+      expect(res.attempts).toBe(1);
+      expect(calls).toBe(1);
+      expect(res.delaysMs).toEqual([]);
+    }
+  });
+
+  test("deadline breach is transient with bounded retries, then transient-terminal", async () => {
+    const limiter = new RateLimiter({
+      maxAttempts: 3,
+      timeoutMs: 20,
+      backoffBaseMs: 1,
+      backoffCapMs: 1,
+      sleep: () => Promise.resolve(),
+      random: () => 0,
+    });
+    let calls = 0;
+    const res = await limiter.execute(KEY, async (): Promise<string> => {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      return "never";
+    });
+    expect(res.status).toBe("transient-terminal");
+    expect(res.attempts).toBe(3);
+    expect(calls).toBe(3);
+    expect(res.delaysMs.length).toBe(2);
+  });
+
+  test("fast transport under a generous deadline succeeds on the first attempt", async () => {
+    const limiter = new RateLimiter({ timeoutMs: 5000, sleep: () => Promise.resolve() });
+    const res = await limiter.execute(KEY, async () => "fast");
+    expect(res.status).toBe("ok");
+    expect(res.value).toBe("fast");
+    expect(res.attempts).toBe(1);
+  });
+
+  test("invalid timeoutMs disables the deadline (legacy no-deadline behavior)", async () => {
+    for (const timeoutMs of [NaN, -5, 0, Number.POSITIVE_INFINITY]) {
+      const limiter = new RateLimiter({ timeoutMs, sleep: () => Promise.resolve() });
+      const res = await limiter.execute(KEY, async () => "ok-no-deadline");
+      expect(res.status).toBe("ok");
+      expect(res.attempts).toBe(1);
+    }
+  });
+});
+
+describe("rate limiter M8-01-FIX-01 F-M8-02: null-status auth never retries transient", () => {
+  test("classifier: null-status + auth code/message → auth-blocked, never transient", () => {
+    expect(classifyTransportError(Object.assign(new Error("x"), { status: null, code: "UNAUTHENTICATED" }))).toBe(
+      "auth-blocked",
+    );
+    expect(classifyTransportError(Object.assign(new Error("x"), { status: null, code: "PERMISSION_DENIED" }))).toBe(
+      "auth-blocked",
+    );
+    expect(classifyTransportError(Object.assign(new Error("401 Unauthorized (no inference)"), { status: null }))).toBe(
+      "auth-blocked",
+    );
+    expect(classifyTransportError(Object.assign(new Error("403 Forbidden (no inference)"), { status: null }))).toBe(
+      "auth-blocked",
+    );
+    // Null status WITHOUT auth markers keeps the documented unknown fallback.
+    expect(classifyTransportError(Object.assign(new Error("weird"), { status: null, code: "SOME_WEIRD" }))).toBe(
+      "transient",
+    );
+    expect(classifyTransportError(Object.assign(new Error("weird"), { status: null }))).toBe("transient");
+  });
+
+  test("execute: null-status UNAUTHENTICATED costs exactly 1 attempt, zero retries", async () => {
+    for (const shape of [
+      Object.assign(new Error("bad credential (no inference)"), { status: null, code: "UNAUTHENTICATED" }),
+      Object.assign(new Error("401 Unauthorized (no inference)"), { status: null }),
+    ]) {
+      const limiter = new RateLimiter({ maxAttempts: 5, sleep: () => Promise.resolve(), random: () => 1 });
+      let calls = 0;
+      const res = await limiter.execute(KEY, async (): Promise<string> => {
+        calls += 1;
+        throw shape;
+      });
+      expect(res.status).toBe("auth-blocked");
+      expect(res.attempts).toBe(1);
+      expect(calls).toBe(1);
+      expect(res.delaysMs).toEqual([]);
+    }
+  });
+});
+
+describe("rate limiter M8-01-FIX-01 F-M8-04: numeric/string transient agreement", () => {
+  test("408/502/503/504 agree as numbers and as digit-guarded strings", () => {
+    for (const code of [408, 502, 503, 504]) {
+      expect(classifyProviderStatus(code)).toBe("transient");
+      expect(classifyProviderStatus(String(code))).toBe("transient");
+      expect(classifyProviderStatus(`HTTP ${code} gateway trouble (no inference)`)).toBe("transient");
+    }
+    expect(classifyProviderStatus("HTTP 503 Service Unavailable")).toBe("transient");
+    expect(classifyProviderStatus("gateway 502 bad gateway")).toBe("transient");
+    expect(classifyProviderStatus("request 408 timeout")).toBe("transient");
+    expect(classifyProviderStatus("504 gateway timeout")).toBe("transient");
+  });
+
+  test("digit-run lookalikes stay permanent, never transient/quota", () => {
+    expect(classifyProviderStatus("error 5021 occurred")).toBe("permanent");
+    expect(classifyProviderStatus("job 14081 cached")).toBe("permanent");
+    expect(classifyProviderStatus("build 5031 green")).toBe("permanent");
+    expect(classifyProviderStatus("trace 15040 ok")).toBe("permanent");
+    expect(classifyProviderStatus("error 5021 occurred")).not.toBe("transient");
+    expect(classifyProviderStatus("error 5021 occurred")).not.toBe("quota");
+  });
+});
+
+describe("rate limiter M8-01-FIX-01 F-M8-03: dispatcher parity (auth never retries, 14029 transient)", () => {
+  test("limiter and dispatcher agree on the core shapes", () => {
+    type Shape = { readonly err: unknown; readonly limiter: ProviderOutcomeClass; readonly quota: boolean; readonly transient: boolean };
+    const shapes: readonly Shape[] = [
+      { err: { status: 402 }, limiter: "quota", quota: true, transient: false },
+      { err: { status: 401 }, limiter: "auth-blocked", quota: false, transient: false },
+      { err: { status: 403 }, limiter: "auth-blocked", quota: false, transient: false },
+      { err: { status: 429 }, limiter: "rate-limited", quota: false, transient: true },
+      { err: { status: 503 }, limiter: "transient", quota: false, transient: true },
+      { err: { status: "503" }, limiter: "transient", quota: false, transient: true },
+      { err: Object.assign(new Error("bad credential (no inference)"), { code: "UNAUTHENTICATED" }), limiter: "auth-blocked", quota: false, transient: false },
+      { err: Object.assign(new Error("denied (no inference)"), { code: "PERMISSION_DENIED" }), limiter: "auth-blocked", quota: false, transient: false },
+      { err: new Error("Invalid API key provided (no inference)"), limiter: "auth-blocked", quota: false, transient: false },
+      { err: new Error("request rate-limited, retry later (no inference)"), limiter: "rate-limited", quota: false, transient: true },
+      { err: Object.assign(new Error("x"), { code: "14029" }), limiter: "transient", quota: false, transient: true },
+      { err: new Error("upstream error 4021, retry later"), limiter: "transient", quota: false, transient: true },
+      { err: { status: "error 5021" }, limiter: "permanent", quota: false, transient: false },
+      { err: { status: "error 14029" }, limiter: "permanent", quota: false, transient: false },
+      { err: { status: "fault 240314" }, limiter: "permanent", quota: false, transient: false },
+    ];
+    for (const { err, limiter, quota, transient } of shapes) {
+      expect(classifyTransportError(err)).toBe(limiter);
+      expect(isDispatchQuotaError(err)).toBe(quota);
+      expect(isDispatchAuthError(err)).toBe(limiter === "auth-blocked");
+      expect(isTransientError(err)).toBe(transient);
     }
   });
 });

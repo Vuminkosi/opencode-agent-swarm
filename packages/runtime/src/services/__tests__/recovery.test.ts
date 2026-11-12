@@ -806,3 +806,89 @@ describe("M5-01-FIX-02 F2 skewed-backlog filtered replay", () => {
     }
   });
 });
+
+describe("M8-01 scan cap: bounded read per pass, documented value", () => {
+  test("REPLAY_SCAN_CAP is exported at its documented value and every pass reports a bounded scan", async () => {
+    const { REPLAY_SCAN_CAP } = await import("../recovery.js");
+    expect(REPLAY_SCAN_CAP).toBe(2000);
+    const dir = tmpDir("m8-01-scancap-");
+    const dbPath = join(dir, "state.sqlite");
+    const store = new SwarmStore(dbPath);
+    const raw = rawHandle(dbPath);
+    try {
+      const swarmOwn = makeSwarm(store);
+      const swarmOther = makeSwarm(store);
+      for (let i = 1; i <= 60; i += 1) {
+        store.appendPost(swarmOther, {
+          authorMemberId: null,
+          kind: "message",
+          body: `filler ${i}`,
+          idempotencyKey: `m8fill-${i}`,
+        });
+      }
+      for (let i = 1; i <= 3; i += 1) {
+        store.appendPost(swarmOwn, {
+          authorMemberId: null,
+          kind: "message",
+          body: `own ${i}`,
+          idempotencyKey: `m8own-${i}`,
+        });
+      }
+      const recovery = new CrashRecovery({ store, db: raw });
+      const report = await recovery.replayOutbox(
+        async () => {},
+        { swarmId: swarmOwn, maxPerRun: 5 },
+      );
+      expect(report.delivered).toBe(3);
+      expect(report.scanned).toBeLessThanOrEqual(REPLAY_SCAN_CAP);
+      // Unfiltered passes are single-fetch: scanned == checked <= maxPerRun.
+      const full = await recovery.replayOutbox(async () => {}, { maxPerRun: 1000 });
+      expect(full.scanned).toBeLessThanOrEqual(REPLAY_SCAN_CAP);
+      expect(full.scanned).toBe(full.checked);
+    } finally {
+      store.close();
+      raw.close();
+    }
+  });
+});
+
+describe("M8-01-FIX-01 F2: NULL-swarm rows quarantine from filtered replays, never lost", () => {
+  test("unknown-kind outbox row: filtered pass excludes it, unfiltered pass redelivers it", async () => {
+    const dir = tmpDir("m8-fix01-f2-");
+    const dbPath = join(dir, "state.sqlite");
+    const store = new SwarmStore(dbPath);
+    const raw = rawHandle(dbPath);
+    try {
+      const swarmId = makeSwarm(store);
+      addMember(store, swarmId, "coder-a", "sess-a");
+      // Unknown kind + vanished aggregate: resolves to NULL swarm (store.ts
+      // is another lane — inserted directly, never via store writers).
+      raw
+        .query("INSERT INTO outbox (id, kind, aggregate_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?)")
+        .run("m8f2-mystery-1", "mystery_kind", "no-such-aggregate", JSON.stringify({}), new Date().toISOString());
+      const recovery = new CrashRecovery({ store, db: raw });
+      // Filtered replay quarantines the NULL-swarm row: excluded, preserved.
+      const filtered = await recovery.replayOutbox(
+        async () => {
+          throw new Error("NULL-swarm row must never reach a filtered consumer");
+        },
+        { swarmId },
+      );
+      expect(filtered.checked).toBe(0);
+      expect(filtered.delivered).toBe(0);
+      expect(filtered.scanned).toBeLessThanOrEqual(2000);
+      expect(store.listPendingOutbox(100).length).toBe(1);
+      // Unfiltered legacy replay still redelivers it: nothing is lost.
+      const seen: string[] = [];
+      const full = await recovery.replayOutbox(async (entry) => {
+        seen.push(entry.id);
+      });
+      expect(full.delivered).toBe(1);
+      expect(seen).toEqual(["m8f2-mystery-1"]);
+      expect(store.listPendingOutbox(100).length).toBe(0);
+    } finally {
+      store.close();
+      raw.close();
+    }
+  });
+});
