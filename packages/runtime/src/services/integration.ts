@@ -288,6 +288,24 @@ export function ensureIntegrationSchema(db: Database): void {
   db.exec(INTEGRATION_RUNS_DDL);
 }
 
+/**
+ * S2-1: the canonical lock lives in the M4-01 `leases` table on the shared
+ * DB handle (M4-01-owned DDL; this service never migrates it, only ensures
+ * presence idempotently). A failure here throws loudly with the required
+ * action instead of surfacing later as a misleading LEASE_HELD.
+ */
+function ensureLeasesSchema(db: Database, ddl: string): void {
+  try {
+    db.exec(ddl);
+  } catch (err) {
+    throw new IntegrationError(
+      "GIT_FAILED",
+      `leases schema unavailable: ${err instanceof Error ? err.message : String(err)} — ensure the shared DB handle applies M4-01 LEASES_DDL`,
+      {},
+    );
+  }
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -504,6 +522,10 @@ export class IntegrationService {
     }
 
     const s = await this.surfaces;
+    // S2-1: ensure the M4-01 leases table exists (idempotent). Genuine DB
+    // failures throw loudly with action (see ensureLeasesSchema) — they
+    // never reach the acquire loop to be misreported as contention.
+    ensureLeasesSchema(this.db, s.LEASES_DDL);
     // Serialized admission: bounded poll for the single canonical lock.
     // Stale (expired) leases recover with fencing++ inside acquire().
     const lock = this.newLock(s);
@@ -516,7 +538,11 @@ export class IntegrationService {
         acquired = { fencingToken: a.fencingToken, recoveredFrom: a.recoveredFrom };
         break;
       } catch (err) {
-        if (errorCode(err) !== "LEASE_HELD" || this.clock() >= deadline) {
+        // S2-1: only a live foreign lease waits/retries. Any other DB/infra
+        // failure propagates untouched — a broken store must never
+        // masquerade as contention (no false LEASE_HELD).
+        if (errorCode(err) !== "LEASE_HELD") throw err;
+        if (this.clock() >= deadline) {
           throw new IntegrationError("LEASE_HELD", `Integration lock unavailable for ${taskId}`, { taskId });
         }
         await delayMs(this.acquirePollMs);
@@ -792,6 +818,7 @@ export class IntegrationService {
     const id = taskId.trim();
     assertTaskId(id);
     const s = await this.surfaces;
+    ensureLeasesSchema(this.db, s.LEASES_DDL);
     const run = this.readRun(id);
     if (run !== null && run.outcome === "integrated") {
       return {
@@ -833,16 +860,36 @@ export class IntegrationService {
 
     // Free or stale lease: prove recovery with a fencing bump, then release
     // immediately (reconcile never integrates — it only re-arms the lock).
+    // S2-3: the observe→acquire window is racy — a rival may grab the lock
+    // in between. A LEASE_HELD here means "uncertain", so quarantine as
+    // ambiguous (preserve the worktree, advance nothing) instead of
+    // throwing; any other failure propagates untouched. Never remerge,
+    // cleanup, or advance while uncertain.
     const holder = `reconcile:${id}`;
-    const acquired = lock.acquire(holder);
-    lock.release(holder, acquired.fencingToken);
-    return {
-      taskId: id, status: run === null ? "no-record" : "recoverable", sha: run?.sha ?? null,
-      fencingToken: acquired.fencingToken, recoveredFrom: acquired.recoveredFrom,
-      leaseHolder: observed?.holder ?? null, worktreeStatus,
-      detail: run === null
-        ? `No integration record for ${id}; stale lease recovered (fencing ${acquired.fencingToken}). Safe to integrate.`
-        : `Prior outcome ${run.outcome} for ${id}; stale lease recovered (fencing ${acquired.fencingToken}). Safe to retry integration.`,
-    };
+    try {
+      const acquired = lock.acquire(holder);
+      lock.release(holder, acquired.fencingToken);
+      return {
+        taskId: id, status: run === null ? "no-record" : "recoverable", sha: run?.sha ?? null,
+        fencingToken: acquired.fencingToken, recoveredFrom: acquired.recoveredFrom,
+        leaseHolder: observed?.holder ?? null, worktreeStatus,
+        detail: run === null
+          ? `No integration record for ${id}; stale lease recovered (fencing ${acquired.fencingToken}). Safe to integrate.`
+          : `Prior outcome ${run.outcome} for ${id}; stale lease recovered (fencing ${acquired.fencingToken}). Safe to retry integration.`,
+      };
+    } catch (err) {
+      if (errorCode(err) !== "LEASE_HELD") throw err;
+      let current: M401LeaseState | null = null;
+      try {
+        current = lock.observe();
+      } catch {
+        current = null;
+      }
+      return {
+        taskId: id, status: "lease-held-ambiguous", sha: run?.sha ?? null, fencingToken: current?.fencingToken ?? null,
+        recoveredFrom: null, leaseHolder: current?.holder ?? null, worktreeStatus,
+        detail: `Lease changed under reconcile for ${id} (race between observe and acquire): quarantined for operator review; no action taken.`,
+      };
+    }
   }
 }

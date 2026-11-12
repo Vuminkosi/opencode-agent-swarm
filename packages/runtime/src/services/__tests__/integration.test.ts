@@ -538,3 +538,145 @@ describe("windows paths", () => {
     60_000,
   );
 });
+
+describe("S2 fail-closed gates + reconcile race (M4-03-REVIEW-01)", () => {
+  test(
+    "branch-mismatched worktree rejected; target unchanged; worktree preserved; row recorded",
+    async () => {
+      const { repo, head } = makeRepo();
+      const root = track(mkdtempSync(join(realTmp(), "m4-03-bm-")));
+      const db = makeDb();
+      const service = svc(repo, db);
+      const wt = await createTaskWorktree(repo, root, "t-bm", head, ["jobs/bm"]);
+      commitFile(wt, "work.txt", "work\n", "work");
+      const mainBefore = targetHead(repo);
+      const r = await service.integrate({
+        taskId: "t-bm",
+        worktreePath: wt,
+        branch: "task/t-bm-wrong",
+        baseCommit: head,
+        verifyCommand: "git rev-parse HEAD",
+        evidenceDir: evidenceDir(),
+      });
+      expect(r.status).toBe("rejected-conflict");
+      expect(targetHead(repo)).toBe(mainBefore);
+      expect(existsSync(wt)).toBe(true);
+      expect(existsSync(join(wt, "work.txt"))).toBe(true);
+      const row = db.query("SELECT outcome FROM integration_runs WHERE task_id = ?").get("t-bm") as {
+        outcome: string;
+      } | null;
+      expect(row?.outcome).toBe("rejected-conflict");
+    },
+    60_000,
+  );
+
+  test(
+    "non-descendant HEAD rejected; target unchanged; worktree preserved; row recorded",
+    async () => {
+      const { repo, head } = makeRepo();
+      const root = track(mkdtempSync(join(realTmp(), "m4-03-nd-")));
+      const db = makeDb();
+      const service = svc(repo, db);
+      const wt = await createTaskWorktree(repo, root, "t-nd", head, ["jobs/nd"]);
+      commitFile(wt, "work.txt", "work\n", "work");
+      // Move main elsewhere so the recorded base is NOT an ancestor of the task HEAD.
+      commitFile(repo, "main-only.txt", "main\n", "main moves on");
+      const mainBefore = targetHead(repo);
+      const r = await service.integrate({
+        taskId: "t-nd",
+        worktreePath: wt,
+        branch: "task/t-nd",
+        baseCommit: mainBefore,
+        verifyCommand: "git rev-parse HEAD",
+        evidenceDir: evidenceDir(),
+      });
+      expect(r.status).toBe("rejected-conflict");
+      expect(targetHead(repo)).toBe(mainBefore);
+      expect(existsSync(wt)).toBe(true);
+      expect(existsSync(join(wt, "work.txt"))).toBe(true);
+      const row = db.query("SELECT outcome FROM integration_runs WHERE task_id = ?").get("t-nd") as {
+        outcome: string;
+      } | null;
+      expect(row?.outcome).toBe("rejected-conflict");
+    },
+    60_000,
+  );
+
+  test(
+    "non-lease lock failure propagates original (no false LEASE_HELD); target unchanged",
+    async () => {
+      const { repo, head } = makeRepo();
+      const root = track(mkdtempSync(join(realTmp(), "m4-03-nolease-")));
+      const db = makeDb();
+      const service = svc(repo, db);
+      const wt = await createTaskWorktree(repo, root, "t-nl", head, ["jobs/nl"]);
+      commitFile(wt, "work.txt", "work\n", "work");
+      const mainBefore = targetHead(repo);
+      const lockProto = (M4.IntegrationLock as unknown as {
+        prototype: { acquire(holder: string): unknown };
+      }).prototype;
+      const origAcquire = lockProto.acquire;
+      lockProto.acquire = (): unknown => {
+        throw Object.assign(new Error("injected infra boom"), { code: "SQLITE_IOERR" });
+      };
+      let err: unknown = null;
+      try {
+        await service.integrate({
+          taskId: "t-nl",
+          worktreePath: wt,
+          branch: "task/t-nl",
+          baseCommit: head,
+          verifyCommand: "git rev-parse HEAD",
+          evidenceDir: evidenceDir(),
+        });
+      } catch (e) {
+        err = e;
+      } finally {
+        lockProto.acquire = origAcquire;
+      }
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toContain("injected infra boom");
+      expect((err as { code?: string }).code).not.toBe("LEASE_HELD");
+      expect(targetHead(repo)).toBe(mainBefore);
+      expect(existsSync(wt)).toBe(true);
+    },
+    60_000,
+  );
+
+  test(
+    "reconcile race (lock grabbed after observe) quarantines ambiguous; no ref advance; worktree preserved",
+    async () => {
+      const { repo, head } = makeRepo();
+      const root = track(mkdtempSync(join(realTmp(), "m4-03-race-")));
+      const db = makeDb();
+      const service = svc(repo, db);
+      const wt = await createTaskWorktree(repo, root, "t-race", head, ["jobs/race"]);
+      commitFile(wt, "work.txt", "work\n", "work");
+      const mainBefore = targetHead(repo);
+      // Inject the race: observe() sees a free lock, then acquire() loses it.
+      const lockProto = (M4.IntegrationLock as unknown as {
+        prototype: { acquire(holder: string): unknown };
+      }).prototype;
+      const origAcquire = lockProto.acquire;
+      lockProto.acquire = (): unknown => {
+        lockProto.acquire = origAcquire;
+        throw Object.assign(new Error("Integration lock held by integrate:t-rival (injected race)"), {
+          code: "LEASE_HELD",
+        });
+      };
+      let rec: Awaited<ReturnType<IntegrationService["reconcile"]>>;
+      try {
+        rec = await service.reconcile("t-race", {
+          worktreeRecord: { worktreePath: wt, branch: "task/t-race", baseCommit: head },
+        });
+      } finally {
+        lockProto.acquire = origAcquire;
+      }
+      expect(rec.status).toBe("lease-held-ambiguous");
+      expect(targetHead(repo)).toBe(mainBefore);
+      expect(existsSync(wt)).toBe(true);
+      expect(existsSync(join(wt, "work.txt"))).toBe(true);
+    },
+    60_000,
+  );
+});
