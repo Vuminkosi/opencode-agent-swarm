@@ -1,0 +1,16 @@
+{
+  "name": "@opencode-swarm/adapter-codex",
+  "version": "0.0.1",
+  "private": true,
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "files": ["src"],
+  "type": "module",
+  "description": "Fail-closed Codex harness probe (M7-02, NOT VERIFIED). Zero runtime dependencies; throws NOT_IMPLEMENTED on every CodingHarness method.",
+  "main": "./src/codex-harness.ts",
+  "types": "./src/codex-harness.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}
