@@ -174,3 +174,34 @@ To resume after top-up (orchestrator-owned; not executed here):
 **Link check (update scope):** no new links added in §§9–12; file still contains no relative or external links — nothing to resolve; check passes vacuously. [PROBE]
 
 **Git operations performed:** NONE (no stage, no commit, no branch, no push). This file is left **dirty (unstaged)** per instructions. No secrets, `.env` contents, tokens, or keys appear in this file.
+
+---
+
+## 13. Final live arc — EXEC-20 / DEBUG-SSE-01-02 / EXEC-21 + typeless-mapping fix (DOC-LIVE-FINAL-01) [PROBE] [DESIGN]
+
+- **Task / Document ID:** DOC-LIVE-FINAL-01 (append-only; §§1–12 preserved, not rewritten).
+- **Date:** 2026-11-12.
+- **Source baseline / HEAD observed:** canonical repo `C:\DevOps\opencode-agent-swarm`, HEAD `ebd5e46` (`feat(harness): typeless-envelope mapping + SSE observability + idle-quiet gate (LIVE-HARNESS-COMMIT-01)`) [PROBE — `git rev-parse HEAD`]. Working tree dirty with one untracked item: `NUL` (uncommitted junk — **not** committed, **not** part of this evidence, left untouched per ownership). No staging, commit, branch, or push performed.
+- **HARD dependencies (only):** EXEC-20, EXEC-21, DEBUG-SSE-02, commit `ebd5e46`. No other runs are claimed or invented.
+
+**EXEC-20 (authoritative supplied outcome):** gate OPEN via `.env`; auth 200; B overlap 22963→20263 ms PASS; C/D wake chain PASS 8/8 + 5/5; E FAIL with 0 terminals, `outcome=succeeded`; spend **$0.00**; server destroyed. [PROBE — supplied]
+
+**DEBUG-SSE-01/02 (authoritative supplied outcome):** parser fix verified safe; allowlist exonerated — `succeeded` / `failed` ARE subscribed + expected terminal kinds, so the zero-terminal observation is not an allowlist defect. [PROBE — supplied]
+
+**EXEC-21 (authoritative supplied outcome):** only `server.connected` + keepalives observed; **NO session-bearing envelopes at all** in the observed run. [PROBE — supplied]
+
+**Typeless-mapping fix — COMMITTED:** `ebd5e46` (`parseTypelessPayload`, `onDrop` diagnostics, idle-quiet gate, Tier-A 69/69). Status **COMMITTED** (HEAD commit; not re-litigated here). [PROBE — `git log --oneline -3`]
+
+**Definitive finding — E-via-SSE = BLOCKED (product behavior, not harness defect):** across every observed run the channel emits no session-scoped SSE frames — only `server.connected` + SSE comments + untyped `data:` frames. With no session-bearing terminal envelopes ever emitted, E-via-SSE-terminal-count cannot proceed and is **BLOCKED** by product behavior, not by a harness defect. No session-bearing SSE frame is claimed observed. [PROBE] [DESIGN]
+
+**E-via-turn-uniqueness — supporting evidence, NOT a PASS:** dedupe recorded zero new turns, unrelated recorded zero, and exactly one successful outcome per admitted wake held across EXEC-20/21. This evidence stands as supporting observation only; **E is never presented as PASS.** No live TUI mount is claimed. [PROBE]
+
+**Spend:** live spend total **$0.00**. [PROBE — supplied]
+
+**Resumption (NOT YET MET):** a single authorized run only after (a) provider quota restored AND (b) a session-bearing emission is confirmed via probe raw capture during a turn. Both conditions are unmet. [DESIGN]
+
+**Release decision:** **RELEASE_CANDIDATE_BLOCKED (unchanged).** [DESIGN]
+
+**NUL note:** untracked `NUL` exists in the working tree; it is uncommitted junk, was not touched by this task, and forms no part of this evidence (NOT VERIFIED / out of scope). [PROBE — `git status --porcelain`]
+
+**Link check (touched-file scope):** this file contains no relative or external links — nothing to resolve; check passes vacuously. Matrix file untouched (see handoff), so no matrix link check was in scope. [PROBE]
