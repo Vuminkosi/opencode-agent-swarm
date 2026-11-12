@@ -808,6 +808,20 @@ export const LEASES_DDL = `CREATE TABLE IF NOT EXISTS leases (
   expires_at TEXT NOT NULL
 );`;
 
+/**
+ * M5-01 fencing high-water (service-owned, same precedent as the runtime
+ * `integration_runs` ensure): `release()` DELETES the `leases` row so
+ * `observe()` stays null-after-release, but a bare DELETE resets the next
+ * `acquire()` token to 1. This table retains the monotonic high-water per
+ * `resource_key` so `acquire()` always exceeds every previously issued
+ * token — including across release cycles. The `leases` row contract is
+ * untouched; git compare-and-swap stays the backstop.
+ */
+export const LEASE_FENCING_HIGH_WATER_DDL = `CREATE TABLE IF NOT EXISTS lease_fencing_high_water (
+  resource_key TEXT PRIMARY KEY,
+  fencing_token INTEGER NOT NULL
+);`;
+
 export interface LeaseState {
   readonly holder: string;
   readonly fencingToken: number;
@@ -830,6 +844,18 @@ export class IntegrationLock {
   private readonly resourceKey: string;
   private readonly ttlMs: number;
   private readonly clock: () => number;
+  /**
+   * F-01 in-process high-water floor (carry-forward): the highest token
+   * this instance has reserved/observed. `Math.max(dbHighWater,
+   * liveToken, memHighWater)` seeds every `acquire()` so a transient
+   * high-water write gap inside this process can never go backwards.
+   * Cross-restart safety still rests on the durable
+   * `lease_fencing_high_water` table — a DDL/read/write failure there is
+   * fail-closed (throws), never a silent `0` fallback.
+   */
+  private memHighWater = 0;
+  /** Bounded CAS retries: contention loses the race and retries, never spins. */
+  private static readonly MAX_CAS_ATTEMPTS = 10;
 
   constructor(
     private readonly db: LeaseDb,
@@ -845,7 +871,80 @@ export class IntegrationLock {
       .query("SELECT holder, fencing_token, expires_at FROM leases WHERE resource_key = ?")
       .get(this.resourceKey) as LeaseRow | null;
     if (row === null || typeof row.holder !== "string") return null;
-    return { holder: row.holder, fencingToken: row.fencing_token, expiresAt: row.expires_at };
+    // S3 NaN clamp: a corrupt/non-finite token must never seed arithmetic —
+    // floor it to 0 so the next acquire strictly exceeds the high-water.
+    const token = typeof row.fencing_token === "number" && Number.isFinite(row.fencing_token) && row.fencing_token >= 0
+      ? Math.floor(row.fencing_token)
+      : 0;
+    return { holder: row.holder, fencingToken: token, expiresAt: row.expires_at };
+  }
+
+  /**
+   * Monotonic high-water (M5-01, F-01 fail-closed): retained across
+   * `release()` DELETEs so the next `acquire()` can never reuse a token.
+   * Idempotent ensure on every use — safe on legacy DBs that predate this
+   * table. FAIL-CLOSED: any DDL/read failure throws (never a silent `0`
+   * fallback that would let the next token reuse a retired value).
+   */
+  private ensureHighWater(): void {
+    this.db.query(LEASE_FENCING_HIGH_WATER_DDL).run();
+  }
+
+  private readHighWater(): number {
+    try {
+      this.ensureHighWater();
+    } catch (err) {
+      throw new WorktreeError(
+        "GIT_FAILED",
+        `Fencing high-water unavailable (DDL failed, fail-closed): ${err instanceof Error ? err.message : String(err)}`,
+        { resourceKey: this.resourceKey },
+      );
+    }
+    let row: { fencing_token: number } | null;
+    try {
+      row = this.db
+        .query("SELECT fencing_token FROM lease_fencing_high_water WHERE resource_key = ?")
+        .get(this.resourceKey) as { fencing_token: number } | null;
+    } catch (err) {
+      throw new WorktreeError(
+        "GIT_FAILED",
+        `Fencing high-water unavailable (read failed, fail-closed): ${err instanceof Error ? err.message : String(err)}`,
+        { resourceKey: this.resourceKey },
+      );
+    }
+    const dbValue =
+      typeof row?.fencing_token === "number" && Number.isFinite(row.fencing_token) && row.fencing_token >= 0
+        ? Math.floor(row.fencing_token)
+        : 0;
+    // In-memory carry-forward: never go below what this process reserved.
+    if (dbValue > this.memHighWater) this.memHighWater = dbValue;
+    return this.memHighWater;
+  }
+
+  private recordHighWater(token: number): void {
+    const safe = Number.isFinite(token) && token >= 0 ? Math.floor(token) : 0;
+    try {
+      this.ensureHighWater();
+      this.db
+        .query(
+          "INSERT INTO lease_fencing_high_water (resource_key, fencing_token) VALUES (?, ?) " +
+            "ON CONFLICT(resource_key) DO UPDATE SET fencing_token = excluded.fencing_token " +
+            "WHERE excluded.fencing_token > lease_fencing_high_water.fencing_token",
+        )
+        .run(this.resourceKey, safe);
+    } catch (err) {
+      // S3 downgrade log + F-01 fail-closed: a lost high-water must never
+      // proceed silently to a lease write that could reuse a token.
+      console.warn(
+        `[worktree-manager] fencing high-water write failed for ${this.resourceKey}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw new WorktreeError(
+        "GIT_FAILED",
+        `Fencing high-water write failed (fail-closed): ${err instanceof Error ? err.message : String(err)}`,
+        { resourceKey: this.resourceKey },
+      );
+    }
+    if (safe > this.memHighWater) this.memHighWater = safe;
   }
 
   private live(state: LeaseState | null, nowMs: number): boolean {
@@ -864,32 +963,100 @@ export class IntegrationLock {
     if (holder.trim() === "") {
       throw new WorktreeError("INVALID_TASK_ID", "Lock holder must not be empty", {});
     }
-    const nowMs = this.clock();
-    const current = this.read();
-    if (this.live(current, nowMs) && current !== null && current.holder !== holder) {
-      throw new WorktreeError("LEASE_HELD", `Integration lock held by ${current.holder} until ${current.expiresAt}`, {
-        holder: current.holder,
-      });
+    // F-01 CAS loop: read → reserve high-water → conditional write. The
+    // lease write is guarded by WHERE fencing_token=<read> (UPDATE) or
+    // WHERE NOT EXISTS (INSERT) so two concurrent acquirers can never both
+    // land the same token: the loser sees changes=0 and retries with a
+    // strictly higher token. The high-water is reserved BEFORE the lease
+    // write so a crash between the two leaves a gap (safe), never a reuse.
+    for (let attempt = 0; attempt < IntegrationLock.MAX_CAS_ATTEMPTS; attempt += 1) {
+      const nowMs = this.clock();
+      const current = this.read();
+      if (this.live(current, nowMs) && current !== null && current.holder !== holder) {
+        throw new WorktreeError("LEASE_HELD", `Integration lock held by ${current.holder} until ${current.expiresAt}`, {
+          holder: current.holder,
+        });
+      }
+      // Fail-closed: throws when the high-water table is unavailable.
+      const highWater = this.readHighWater();
+      const base = current?.fencingToken ?? 0;
+      const fencingToken = Math.max(base, highWater, this.memHighWater) + 1;
+      if (!Number.isFinite(fencingToken) || fencingToken <= 0) {
+        throw new WorktreeError("GIT_FAILED", "Fencing token overflow (fail-closed)", {
+          resourceKey: this.resourceKey,
+        });
+      }
+      // Reserve first (fail-closed on write failure — no lease written yet).
+      this.recordHighWater(fencingToken);
+      const expiresAt = new Date(nowMs + this.ttlMs).toISOString();
+      if (current === null) {
+        const outcome = this.db
+          .query(
+            "INSERT INTO leases (resource_key, holder, fencing_token, expires_at) " +
+              "SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM leases WHERE resource_key = ?)",
+          )
+          .run(this.resourceKey, holder, fencingToken, expiresAt, this.resourceKey) as unknown as {
+          changes?: unknown;
+        };
+        if ((typeof outcome?.changes === "number" ? outcome.changes : 0) === 0) continue; // lost insert race: retry higher
+      } else {
+        const outcome = this.db
+          .query(
+            "UPDATE leases SET holder = ?, fencing_token = ?, expires_at = ? WHERE resource_key = ? AND fencing_token = ?",
+          )
+          .run(holder, fencingToken, expiresAt, this.resourceKey, current.fencingToken) as unknown as {
+          changes?: unknown;
+        };
+        if ((typeof outcome?.changes === "number" ? outcome.changes : 0) === 0) continue; // lost CAS race: retry higher
+      }
+      if (fencingToken > this.memHighWater) this.memHighWater = fencingToken;
+      return {
+        holder,
+        fencingToken,
+        expiresAt,
+        recoveredFrom: current !== null && !this.live(current, nowMs) ? current.holder : null,
+      };
     }
-    const fencingToken = (current?.fencingToken ?? 0) + 1;
-    const expiresAt = new Date(nowMs + this.ttlMs).toISOString();
-    this.db
-      .query("INSERT OR REPLACE INTO leases (resource_key, holder, fencing_token, expires_at) VALUES (?, ?, ?, ?)")
-      .run(this.resourceKey, holder, fencingToken, expiresAt);
-    return {
+    throw new WorktreeError("LEASE_HELD", "Integration lock contention: concurrent acquirer won the race", {
       holder,
-      fencingToken,
-      expiresAt,
-      recoveredFrom: current !== null && !this.live(current, nowMs) ? current.holder : null,
-    };
+    });
   }
 
-  /** Release only when held by `holder` (and the token matches, when given). */
+  /**
+   * Release only when held by `holder` WITH the matching fencing token
+   * (M5-01-FIX-02 F1 fail-closed): an omitted token is a no-op returning
+   * false — a stale `release(holder)` after a same-holder re-acquire must
+   * never delete the live lease. The high-water is retained BEFORE the
+   * DELETE and a high-water failure aborts WITHOUT deleting, so a retired
+   * token can never be lost. Returns false when the row moved under us
+   * (CAS guard) or when the token is omitted/mismatched.
+   */
   release(holder: string, fencingToken?: number): boolean {
+    // F1 fail-closed: tokenless release is a no-op (audit + false), never
+    // a delete — the caller must prove ownership of the live generation.
+    if (fencingToken === undefined) {
+      console.warn(
+        `[worktree-manager] release without fencing token denied (fail-closed) for ${this.resourceKey} holder=${holder}`,
+      );
+      return false;
+    }
     const current = this.read();
     if (current === null || current.holder !== holder) return false;
-    if (fencingToken !== undefined && current.fencingToken !== fencingToken) return false;
-    this.db.query("DELETE FROM leases WHERE resource_key = ? AND holder = ?").run(this.resourceKey, holder);
-    return true;
+    if (current.fencingToken !== fencingToken) return false;
+    // Retain the monotonic high-water BEFORE the DELETE so the next
+    // acquire (after release, or after a crash) strictly exceeds it.
+    // Fail-closed: throws without deleting when the high-water is unavailable.
+    this.recordHighWater(current.fencingToken);
+    if (current.fencingToken > this.memHighWater) this.memHighWater = current.fencingToken;
+    const outcome = this.db
+      .query("DELETE FROM leases WHERE resource_key = ? AND holder = ? AND fencing_token = ?")
+      .run(this.resourceKey, holder, current.fencingToken) as unknown as { changes?: unknown };
+    // S3 release changes check: 0 changes means the row moved under us.
+    return (typeof outcome?.changes === "number" ? outcome.changes : 0) > 0;
+  }
+
+  /** Highest fencing token ever issued for this resource (0 when unknown). */
+  observeHighWater(): number {
+    return this.readHighWater();
   }
 }
