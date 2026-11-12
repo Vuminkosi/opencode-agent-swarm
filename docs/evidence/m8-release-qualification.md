@@ -1,9 +1,17 @@
-# M8 release qualification — residual hardening + release-readiness record (M8-CODE-COMMIT-01)
+# M8 release qualification — residual hardening + release-readiness record (M8-CODE-COMMIT-01 + M8-FIX-COMMIT-01)
 
-> **Document status: IMPLEMENTED (code-observed at `7d4d79b`) / COMMITTED
-> (`7d4d79b42b6a775a31fbe9bfca458045714a2ef4`) / NOT VERIFIED (live inference,
+> **Document status: IMPLEMENTED (code-observed at `7d4d79b` + fix commit
+> `895316a`) / COMMITTED
+> (`7d4d79b42b6a775a31fbe9bfca458045714a2ef4` + fix `895316a16e1137dfbe40223bcc9c97807d968cc3`, HEAD) / NOT VERIFIED (live inference,
 > live server, live TUI mount, fresh test/typecheck runs) / TODO (release
 > decision — master-owned).**
+> §§1–9 below are the DOC-M8-COMMIT-01 record at `7d4d79b`, preserved
+> unchanged as the amend base (their internal HEAD/stat/chain lines still
+> describe that commit — see §10 for the fix-commit delta). **§10 is the
+> fix-commit amendment at `895316a`** (code-observed; full-suite totals and
+> Phase-4 re-review verdicts are **supplied M8-FULL/M8-FIX handoff evidence,
+> not fresh runs of this DOC session** — this session executed only the
+> link check in §10.8).
 > Every behavior below is code-observed at the recorded HEAD and covered by
 > committed **FakeHarness simulations with disposable in-memory/tmp doubles** —
 > never live inference, never live server turns, never live spend, never the
@@ -241,3 +249,224 @@ required by spec §14 M8. [PROBE]
 | Live turns / contention / provider shapes / spend / TUI mount / fresh-install E2E | NOT VERIFIED (no live log in repo) |
 | Upgrade/rollback path (§5) | DOCUMENTED (no migration file; revert/checkout-prior-commit) |
 | Release / shipped / production | NOT CLAIMED — commit is not a release; decision TODO (master-owned) |
+
+## 10. Fix-commit evidence — M8-FIX-COMMIT-01 at `895316a` [PROBE]
+
+> **Amendment status: IMPLEMENTED (code-observed at `895316a16e1137dfbe40223bcc9c97807d968cc3`, HEAD) / COMMITTED
+> (`895316a`, verified `git rev-parse HEAD`) / full-suite totals VERIFIED-supplied (supplied M8-FULL/M8-FIX handoff evidence, not fresh runs
+> of this DOC session) / live inference + provider 402-shape NOT VERIFIED / release decision UNDECIDED-PENDING-MASTER.**
+> §§1–9 above are preserved unchanged as the `7d4d79b` amend base; nothing
+> below rewrites them. Fix behavior is described as implemented and
+> committed, never as released or shipped. [DESIGN]
+
+- **Canonical repo:** `C:\DevOps\opencode-agent-swarm`
+- **Fix HEAD:** `895316a16e1137dfbe40223bcc9c97807d968cc3` —
+  `feat(m8): store dedupe swarm-scope, ingest contention, rate-limiter ledger with rpc/path-policy fixes (M8-FIX-COMMIT-01)` [PROBE — `git rev-parse HEAD`, inspected]
+- **Commit stat:** `12 files, 1234 insertions(+), 65 deletions(-)` (`git show --stat HEAD`, inspected — file list in §10.1). [PROBE]
+- **Prior chain (oldest → newest):** `… → 9111c4a` (M7) → `8ea372f` (DOC-M7-01) → `7d4d79b` (M8-CODE-COMMIT-01) → `2cae97b` (DOC-M8-COMMIT-01) → `895316a` (M8-FIX-COMMIT-01, HEAD). [PROBE — `git log --oneline`, inspected]
+- **Git status at inspection:** clean apart from the same untracked junk file `NUL` at the repo root recorded in §6 — in no commit, never evidence, left untouched. [PROBE]
+
+### 10.1 Fix file list (exact, from `git show --stat HEAD`) [PROBE]
+
+| File | Change (stat) | Role [DESIGN] |
+|---|---|---|
+| `packages/runtime/src/db/store.ts` | fencing/quarantine/dedupe delta | S2 closures: fencing high-water monotonic guard, quarantine TTL + review queue, swarm-scoped dedupe + migration 004 wiring |
+| `packages/runtime/src/db/migrations/004_inbox_dedupe_swarm_scope.sql` | 26 lines (new) | Additive-only migration: new `inbox_dedupe_scoped` table (`PRIMARY KEY (swarm_id, source, external_event_id)`); legacy `inbox_dedupe` frozen in place for audit, still honored conservatively as global duplicates; all objects `IF NOT EXISTS`, applied once via `schema_migrations` (version 4) |
+| `packages/plugin/src/rpc.ts` | RPC hardening | S2 closures: `invalid_caller` rejection, explicit edit vs write separation |
+| `packages/plugin/src/__tests__/tui-rpc.test.ts` | +141 lines | RPC re-verification rows (supplied PASS) |
+| `packages/git-workspaces/src/path-policy.ts` | path guards | S2 closures: prefix, device, and NUL guards |
+| `packages/git-workspaces/src/__tests__/path-policy.test.ts` | +123 lines | Path-policy rows (supplied PASS) |
+| `packages/adapter-opencode/src/sessions.ts` | adapter delta | Session-surface fix hunk (see [compat §14](compatibility-report.md#14-m8-fix-compatibility-addendum-doc-m8-final-01)) |
+| `packages/adapter-opencode/src/__tests__/bridge.test.ts` | +18 lines | Bridge rows (supplied PASS) |
+| `packages/runtime/src/services/ingest.ts` | ingest delta | Ingest contention hardening |
+| `packages/runtime/src/services/wake-dispatcher.ts` | dispatcher delta | Rate-limiter ledger wiring |
+| `packages/runtime/src/services/__tests__/rate-limit.test.ts` | +201 lines | Ledger + parity rows (supplied PASS) |
+| `tests/fault-injection/m8-store.test.ts` | 255 lines (new) | Store fault-injection rows: fencing, quarantine, scoped dedupe (supplied PASS) |
+
+Total fix: **12 files, 1234 insertions, 65 deletions**. [PROBE]
+
+### 10.2 S2 closures (supplied Phase-4 re-review disposition; COMMIT-ready lanes) [PROBE]
+
+Supplied Phase-4 collection verdicts used here — **no finding IDs are
+invented beyond the supplied S2-generic class**:
+
+- **Fencing monotonic** (`store.ts`): high-water advance is monotonic; concurrent losers retry higher, never spin, never regress — F-01 ACCEPTED RISK condition from §6 is satisfied by mechanism (live-server contention timing still NOT VERIFIED; revisit condition carries for any production claim).
+- **Quarantine TTL + review queue** (`store.ts`): ambiguous admissions quarantine with a bounded TTL and an operator review queue — exactly-once physical delivery still not claimed (M2 carry).
+- **Scoped dedupe + migration 004** (`store.ts` + `004_inbox_dedupe_swarm_scope.sql`): cross-swarm `(source, id)` collisions no longer dedupe each other; legacy rows kept for audit and honored conservatively. Migration is additive and forward-safe (see §10.6).
+- **RPC `invalid_caller` + explicit edit/write** (`rpc.ts`): unknown callers fail closed; edit and write paths are explicit and separated.
+- **Path prefix / device / NUL guards** (`path-policy.ts`): lexical + ancestor-aware prefix checks, device-path refusal, NUL-byte refusal.
+- **Ledger wiring** (`wake-dispatcher.ts` + `ingest.ts`): rate-limiter ledger is wired through dispatch and ingest contention paths.
+- **Digit-guard parity incl. timeout-with-digits edge**: dispatcher and limiter classifiers agree on every core shape (`429`/`402`/`401`/`403`/`408`/`502`/`503`/`504`, digit-run lookalikes, status-less auth); the documented edge is a timeout whose message embeds digits — classified bounded-transient, never quota/auth confusion.
+- **Re-review verdicts (supplied, not fresh):** store / RPC / compat lanes **COMMIT-ready**, S2s closed. This section records targeted re-verification already done at fix time — it is **not** a full re-review. [PROBE]
+
+### 10.3 Accepted residuals [PROBE]
+
+- **F-01 (scan cap): ACCEPTED RISK + revisit** (carried from §6): every replay pass reads at most 2000 rows; revisit against live-server contention evidence before any production claim.
+- **F-04 (harness 402-shape): NOT VERIFIED (carried, not closed).** The fix adds no inference path and no paid-service call; the exact 402/quota error shape a live provider surfaces remains unproven. Resumption: capture a live 402 in a disposable probe run and reconcile `isQuotaError` before any paid-path autonomy claim.
+- **Harness S3s: deferred** (supplied disposition) — filed follow-ups, non-blocking for fix closeout.
+- **Codex transport: honest stub, 4 gating items open** (carried from §6; the fix suite never imports the stub).
+
+### 10.4 Full-suite totals at `895316a` (supplied, not fresh) [PROBE]
+
+Supplied M8-FULL/M8-FIX handoff evidence, cited here — **no build, test,
+or typecheck was re-executed in this DOC session**:
+
+| Check | Supplied result |
+|---|---|
+| Full suite | **514 passed / 0 failed / 14054 assertions / 36 files** |
+| Typecheck | **tsc 9/9 clean** (supplied) |
+| Frozen adapter | **0 imports** (supplied — frozen port has zero runtime deps) |
+| Toolchain / env | Per handoff env table (supplied): OpenCode CLI build 2.2.7, Bun 1.4.4, TypeScript 5.9.2, `@opencode/plugin` 2.2.7, `protocolVersion`/`schemaVersion` 1 — recorded as the pinned matrix in §10.5; live `opencode --version` / `bun --version` capture logs remain NOT VERIFIED |
+| Zero-inference proof wording | FakeHarness transports with disposable in-memory/tmp doubles only — no live inference, no live server turns, no live spend, no credentials; the canonical checkout was never a test subject |
+| Live inference + 402-shape | **NOT VERIFIED** (no live log) |
+
+### 10.5 Amended release checklist (per-gate verdicts + remaining blockers) [PROBE]
+
+Each gate carries an explicit verdict. **This table is an input to the
+release decision, not the decision.** Commit `895316a` is not a release;
+no shipped/production claim is made anywhere in this file.
+
+| # | Gate (spec §14 M8 + exit criteria) | Verdict after fix |
+|---|---|---|
+| G1 | Residual hardening implemented (M8 deltas, §2) | **PASS (IMPLEMENTED, code-observed; supplied PASS)** |
+| G1-FIX | S2 closures: fencing monotonic, quarantine TTL+review queue, scoped dedupe + 004, RPC `invalid_caller` + explicit edit/write, path prefix/device/NUL guards, ledger wiring, digit-guard parity | **PASS (IMPLEMENTED at `895316a`, code-observed; supplied targeted re-verification PASS — store/rpc/compat lanes COMMIT-ready)** |
+| G2 | 10k-row outbox replay drains across scan-bounded passes | **PASS (supplied simulation) / live deep-backlog timing NOT VERIFIED** |
+| G3 | Two-handle contention serializes, zero `SQLITE_BUSY` | **PASS (supplied simulation) / live concurrent-load timing NOT VERIFIED** |
+| G4 | Non-vacuous secrets canaries | **PASS (supplied simulation)** |
+| G5 | Classification hardening incl. timeout-with-digits edge | **PASS (supplied simulation)** |
+| G6 | Windows junction/case/8.3 confinement proved live at M8-CODE time | **PASS (supplied, host-live at M8-CODE time) / fleet generality NOT VERIFIED** |
+| G7 | Model/permission inheritance unchanged | **PASS (supplied simulation)** |
+| G8 | Codex adapter explicitly unsupported stub | **NOT-VERIFIED-stub (by design, unchanged)** |
+| G9 | Fresh Windows install smoke + E2E (spec §14 M8 required gate) | **BLOCKED — NOT VERIFIED** (no fresh-install smoke/E2E log; no live server, no installer run, no screenshots) |
+| G10 | Live inference / live server turns / provider 402 shaping / spend | **BLOCKED — NOT VERIFIED** (no live log; F-04 carried §10.3) |
+| G11 | Live TUI mount | **BLOCKED — NOT VERIFIED (→ fallback)** — terminal board (`bunx opencode-swarm board`) stays the contract-approved fallback per spec §4.4 |
+| G12 | No-token-waste idle window; crash safety; no unsafe integration | **PASS (supplied simulation) / live 10-minute window NOT VERIFIED** |
+| G13 | Upgrade/rollback path documented, migration risk bounded | **PASS (documentation, §10.6)** — additive 004 is forward-safe; rollback = `git revert` / reset to `7d4d79b` + rerun targeted suites; no migrations to roll back beyond additive 004 |
+| G14 | Full suite at fix HEAD (514/0/14054/36, tsc 9/9, frozen 0) | **PASS-supplied (not fresh) / live items NOT VERIFIED** |
+
+**Gate roll-up for the decision-maker:** hardening + fix + simulation gates (G1, G1-FIX, G2–G8-sim, G12-sim, G13, G14-supplied) are **satisfied as implementation inputs**; live/release gates (G9, G10, G11, G12-live) are **NOT VERIFIED and block any release claim**. Remaining blockers: **live inference unauthorized = BLOCKED** (no live log, no credentials, no spend authorized); **F-04 402-shape NOT VERIFIED**; **harness S3s deferred**. A release decision additionally requires the master-owned live-install smoke/E2E run, which this file scopes but does not perform. [PROBE]
+
+### 10.6 Version compatibility matrix — pinned at `895316a` [PROBE]
+
+| Component | Pinned version | Status |
+|---|---|---|
+| OpenCode CLI build | 2.2.7 | [PROBE] — pinned candidate; no live `opencode --version` log in this baseline — NOT VERIFIED live |
+| Bun | 1.4.4 | [PROBE] — pinned candidate; no live `bun --version` log in this baseline — NOT VERIFIED live |
+| TypeScript | 5.9.2 | [DESIGN] selected (`package.json` devDependencies); confirm via install log — NOT VERIFIED here |
+| `@opencode/plugin` | 2.2.7 | [DESIGN] pinned in `packages/plugin/package.json`; UNCONFIRMED candidate — NOT VERIFIED by any live-server log |
+| `@opencode/sdk` | TBD (preferred: same minor as plugin) | [PROBE] — NOT VERIFIED; do not depend on it until probes confirm the session surface |
+| Protocol / schema version | 1 | [DESIGN] (`protocolVersion`/`schemaVersion` 1 per handoff env table) |
+| Node | n/a (Bun runtime) | [DESIGN] |
+| Git baseline | `895316a` ← `2cae97b` ← `7d4d79b` ← `8ea372f` ← `9111c4a` ← … (chain in §10 header) | [PROBE] — `git rev-parse HEAD` + `git log --oneline`, inspected |
+| Generation rule | v2 `@opencode/*` only — never `@opencode-ai/*` (spec §1) | [OC2-DOC] No production code references the legacy generation. [DESIGN] |
+
+The fix introduces no new toolchain assumption: deltas are confined to runtime store/services, plugin RPC, git-workspace path policy, adapter sessions, their focused tests, the new `m8-store.test.ts` fault-injection suite, and the additive 004 migration. [DESIGN]
+
+### 10.7 Upgrade / rollback instructions (documentation; commands UNEXECUTED here) [DESIGN]
+
+No downgrade-migration step exists: migration 004 is **additive only** —
+it creates the new `inbox_dedupe_scoped` table with `IF NOT EXISTS`,
+freezes the legacy `inbox_dedupe` table in place (pre-004 rows carry no
+swarm attribution and are kept for audit; ingest still honors them
+conservatively), and applies once via `schema_migrations` (version 4).
+There is therefore **no schema-downgrade step**. [DESIGN — code-observed
+in `packages/runtime/src/db/migrations/004_inbox_dedupe_swarm_scope.sql`]
+
+- **Upgrade:** move the checkout across the documented range `7d4d79b →
+  895316a` (code range; DOC commits `2cae97b` carry the amend-base
+  documentation), reinstall per [install](../install.md), and re-run the
+  typecheck/test commands named in §7 (UNEXECUTED here — follow the
+  install guide; do not invent flags or versions). No data migration is
+  required beyond the additive 004 ensure, which runs on open. [DESIGN]
+- **Rollback:** the fix is a source-and-additive-schema delta, so rollback
+  is `git revert` the fix commit (or reset the checkout to `7d4d79b`) +
+  rerun the targeted suites (`rate-limit`, `path-policy`, `tui-rpc`,
+  `bridge`, `m8-store` fault-injection). No migrations roll back: 004
+  creates only the new scoped table and never alters or drops legacy
+  rows, so a pre-004 checkout keeps reading legacy `inbox_dedupe` rows
+  unchanged (forward-safe). [DESIGN]
+- **Destructive operations:** none are authorized by this file. Never
+  reset a dirty working tree, never force-push, never delete a database
+  or worktree outside the disposable-tmp test convention. Reading this
+  runbook never authorizes executing it against production. [DESIGN]
+
+**The release decision is master-owned.** This file — §§1–9 as the
+`7d4d79b` record plus this §10 fix amendment — is an input to that
+decision, never the decision itself. Do not treat any PASS above as a
+release approval; see [release-decision](../release/release-decision.md)
+(stub, `decision: UNDECIDED-PENDING-MASTER`). [DESIGN]
+
+### 10.8 Reproducible log (commands inspected at HEAD; NOT re-executed in this DOC session)
+
+```powershell
+git rev-parse HEAD
+# 895316a16e1137dfbe40223bcc9c97807d968cc3 (inspected)
+
+git show --stat HEAD
+# 12 files changed, 1234 insertions(+), 65 deletions(-) (inspected — file list in §10.1)
+
+git log --oneline -5
+# 895316a (HEAD) / 2cae97b / 7d4d79b / 8ea372f / 9111c4a (inspected)
+
+# Supplied (cited, NOT re-executed here — no build/test/bench re-runs in DOC-M8-FINAL-01):
+# full suite 514 passed / 0 failed / 14054 assertions / 36 files (supplied) +
+#   tsc 9/9 clean (supplied) + frozen-adapter 0 imports (supplied) +
+#   FakeHarness + disposable tmp, zero inference/spend/credentials
+# live inference / live server / live spend / provider 402-shape: NOT VERIFIED (no live log, no credentials)
+```
+
+Repro commands that WOULD reproduce (labeled supplied/inspected,
+UNEXECUTED here): `bun run typecheck` (repo root), `bun test
+packages/runtime/src/services/__tests__/rate-limit.test.ts`, `bun test
+packages/git-workspaces/src/__tests__/path-policy.test.ts`, `bun test
+packages/plugin/src/__tests__/tui-rpc.test.ts`, `bun test
+tests/fault-injection/m8-store.test.ts`, `bun test` (full suite). Counts
+above are **supplied handoff evidence with honest scope**: cited from
+the M8-FULL/M8-FIX handoffs, not freshly executed in this documentation
+session. To advance the live gates, run the suites on the pinned
+toolchain, capture the logs, mount a disposable live probe, and run the
+fresh-install smoke/E2E required by spec §14 M8. [PROBE]
+
+#### Link validation (the only check executed in this DOC session) [PROBE]
+
+- Relative links new or touched by this amendment (`../install.md`,
+  `../release/release-decision.md`, `compatibility-report.md#14-…`,
+  existing `plan/spec.md`, `milestone-matrix.md`,
+  `compatibility-report.md`, `m7-scale-codex.md`, `m6-parity-ux.md`,
+  `m5-robustness.md`, `../install.md`, `../api-compatibility.md`)
+  validated by read-only path-existence inspection (`Test-Path` over
+  `docs/` + the new `docs/release/` files); all targets exist — exit 0.
+- No unexecuted command example is presented as executed; §10.7/§10.8
+  commands are labeled UNEXECUTED/supplied.
+- This amendment creates no duplicate of the install procedure, API
+  record, compatibility matrices, or prior evidence — it links to them
+  (§10 header, §10.7).
+
+### 10.9 Gaps and NOT VERIFIED list (additive to §8) [PROBE]
+
+1. Full-suite/typecheck/link figures in §10.4 (§10.8) are supplied handoff evidence cited from M8-FULL/M8-FIX, not fresh executions of this doc session (link check only, §10.8).
+2. Live inference/spend, live server turns, live contention timing, provider 402 shaping (F-04), bench hardware dependence, and the live 10-minute idle window are NOT VERIFIED (no live log, no credentials).
+3. Fresh-install smoke/E2E on Windows (spec §14 M8 required gate) is NOT VERIFIED — the release-blocking gap.
+4. Live TUI mount is NOT VERIFIED (terminal board is the contract fallback); live 10-minute idle window is NOT VERIFIED.
+5. Exactly-once physical delivery is not claimed; ambiguous admissions quarantine for operator review by design (M2 carry, TTL-bounded per §10.2).
+6. Codex transport is honestly unbuilt — four gating questions open (§10.3); no stable-verb, session-identity, model-mapping, or snapshot claim is made.
+7. Untracked `NUL` junk file at repo root is uncommitted noise, never evidence, left untouched.
+8. No live-server, screenshot, deployment, endpoint, CLI-flag, release-number, or support-promise claims are made in this amendment.
+9. The release decision itself is TODO and master-owned — this file is an input, not an approval (`decision: UNDECIDED-PENDING-MASTER`).
+
+### 10.10 Claim-status summary (fix amendment)
+
+| Claim | Status |
+|---|---|
+| S2 closures: fencing monotonic, quarantine TTL+review queue, scoped dedupe + 004, RPC `invalid_caller` + explicit edit/write, path prefix/device/NUL guards, ledger wiring, digit-guard parity incl. timeout-with-digits edge | IMPLEMENTED (code-observed at `895316a`, supplied targeted re-verification PASS — store/rpc/compat lanes COMMIT-ready) |
+| Full suite 514/0/14054/36, tsc 9/9, frozen-adapter 0 imports | VERIFIED-supplied (supplied handoff evidence, not a fresh run — labeled honestly, §10.4) |
+| Commit `895316a` (12 files, 1234+/65−) | COMMITTED (HEAD, §10.1) |
+| Prior chain `… → 7d4d79b → 2cae97b → 895316a` | COMMITTED (inspected log) |
+| F-01 (scan cap) | ACCEPTED RISK with revisit condition (carried) |
+| F-04 (harness 402-shape) | NOT VERIFIED (carried, not closed) |
+| Harness S3s | Deferred filed follow-ups, non-blocking |
+| Codex transport | NOT-VERIFIED-stub, 4 gating items open (by design, unchanged) |
+| Live turns / contention / provider shapes / spend / TUI mount / fresh-install E2E | NOT VERIFIED (no live log in repo) |
+| Upgrade/rollback path (§10.7) | DOCUMENTED (additive 004, forward-safe; revert/reset to `7d4d79b` + rerun targeted suites) |
+| Toolchain pins (opencode 2.2.7, bun 1.4.4, TS 5.9.2, `@opencode/plugin` 2.2.7, protocolVersion/schemaVersion 1) | PINNED-candidate matrix (§10.6); live version captures NOT VERIFIED |
+| Release / shipped / production | NOT CLAIMED — fix commit is not a release; decision UNDECIDED-PENDING-MASTER (master-owned) |

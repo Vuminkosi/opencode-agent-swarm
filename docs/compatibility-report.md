@@ -501,3 +501,54 @@ One untracked junk file `NUL` sits at the repo root; it is in neither M8 commit 
 3. Codex transport is honestly unbuilt — the four gating items above stay open; no stable-verb, session-identity, model-mapping, or snapshot claim is made. [DESIGN]
 4. Exactly-once physical delivery is not claimed; ambiguous admissions quarantine for operator review by design. [DESIGN]
 5. No live-server, screenshot, deployment, endpoint, CLI-flag, release, or support-promise claims are made in this addendum. [DESIGN]
+
+## 14. M8-fix compatibility addendum (DOC-M8-FINAL-01)
+
+> **Document status for this section only: APPROVED CONTRACT + IMPLEMENTED
+> (FakeHarness + tmp-Git/tmp-SQLite/disposable-tmp simulations, supplied —
+> not freshly executed here) / COMMITTED at `895316a`.** Live-server and
+> live-inference behavior remain **NOT VERIFIED**. §§1–13 above are unchanged
+> M0/M2/M3/M4/M5/M6/M7/M8 baseline; nothing below rewrites them. [DESIGN]
+
+- **Baseline:** HEAD `895316a16e1137dfbe40223bcc9c97807d968cc3` —
+  `feat(m8): store dedupe swarm-scope, ingest contention, rate-limiter ledger with rpc/path-policy fixes (M8-FIX-COMMIT-01)`; 12 files, 1234 insertions, 65 deletions.
+  Prior: `7d4d79b` (M8) → `2cae97b` (DOC-M8-01) → `895316a` (M8-FIX, HEAD). [PROBE]
+- **Constraint compliance:** no protocol change (no `packages/protocol` file in the commit); no OpenCode default change (bridge Tier-A surface untouched, `OpenCodeHarness`/`backend: "opencode"` unshadowed). Deltas are confined to runtime store/services (`store.ts`, `ingest.ts`, `wake-dispatcher.ts`), plugin RPC (`rpc.ts`), git-workspace path policy, adapter sessions, their focused tests, the new `tests/fault-injection/m8-store.test.ts` suite (255 lines), and the additive 004 migration. [DESIGN]
+- **Evidence:** store + RPC + path-policy + bridge focused rows and the new `m8-store` fault-injection rows PASS (FakeHarness/tmp-Git/tmp-SQLite, supplied — not fresh executions of this doc session); full-suite 514/0/14054/36 + tsc 9/9 + frozen-adapter 0 imports supplied; live inference NOT VERIFIED. [PROBE]
+
+### 14.1 Fix hunks vs OpenCode surface [DESIGN]
+
+| Surface | Status in M8-FIX |
+|---|---|
+| Adapter sessions (`packages/adapter-opencode/src/sessions.ts`) | Session-surface fix hunk only; frozen port (`port.ts`) untouched with zero runtime deps. No new native method, event, permission, or model ref assumed. [DESIGN] — IMPLEMENTED, live transport behavior NOT VERIFIED |
+| Plugin RPC (`packages/plugin/src/rpc.ts`) | `invalid_caller` fail-closed rejection + explicit edit/write separation; versioned `swarm/0` schema discipline unchanged (§11.2 carry). No new OpenCode API assumed. [DESIGN] — IMPLEMENTED, live transport behavior NOT VERIFIED |
+| Harness / session / model surface | Unchanged by M8-FIX. Ledger wiring bounds dispatch/ingest contention paths; digit-guard parity (limiter ↔ dispatcher, incl. the timeout-with-digits edge) keeps quota/auth/transient agreement without touching any native surface. [DESIGN] — IMPLEMENTED, live transport behavior NOT VERIFIED |
+| Codex transport | Honestly unbuilt (carried): the fix suite never imports the M7 fail-closed stub (absence asserted in-suite). Four gating items stay open — (1) stable non-`[experimental]` verb set covering the full port, (2) session-identity mapping (thread UUID ↔ `sessionId`, resume/fork), (3) `ModelRef` ↔ Codex model-string mapping, (4) stable completion/snapshot semantic for `getSession` + crash-window dedupe — per the [adapter-codex probe log](../packages/adapter-codex/README.md). [DESIGN] — NOT VERIFIED |
+| Live TUI mount | Still NOT VERIFIED; the terminal board (`bunx opencode-swarm board`) remains the contract-approved fallback per spec §4.4 (M6 carry). [PROBE] |
+| Live probes 01–12 | Still NOT VERIFIED — no `probe-NN.log` exists in the repo. M8-FIX simulations close no live probe. [PROBE] |
+
+### 14.2 Digit-guard parity (limiter ↔ dispatcher, incl. timeout-with-digits edge) [DESIGN]
+
+- Limiter and dispatcher classifiers agree on every core shape (`429`/`402`/`401`/`403`/`408`/`502`/`503`/`504`, digit-run lookalikes such as `14029`/`4021`, status-less auth) via anchored non-digit-boundary tokens. [DESIGN] — IMPLEMENTED, supplied parity rows PASS
+- Documented edge: a timeout whose message embeds digits classifies bounded-transient under the existing retry budget — never quota/auth confusion, never an uncancellable storm. [DESIGN] — IMPLEMENTED, live timing behavior NOT VERIFIED
+
+### 14.3 Ledger wiring [DESIGN]
+
+- The rate-limiter ledger is wired through the wake-dispatcher and ingest contention paths, so throttled/blocked outcomes are recorded on the same ledger the recovery and review surfaces read. No new native surface is assumed; zero speculative spend is preserved (throttle queues admit without calling the transport). [DESIGN] — IMPLEMENTED, live spend behavior NOT VERIFIED
+
+### 14.4 Migration 004 note — additive, service-ensured, dead-schema avoidance rationale [DESIGN]
+
+- Migration `004_inbox_dedupe_swarm_scope.sql` is **additive only**: it creates the new `inbox_dedupe_scoped` table (`PRIMARY KEY (swarm_id, source, external_event_id)`) with `IF NOT EXISTS`, applied once via `schema_migrations` (version 4). The legacy `inbox_dedupe` table is frozen in place — pre-004 rows carry no swarm attribution, are kept for audit, and are still honored conservatively as global duplicates — so a pre-004 checkout keeps reading legacy rows unchanged (forward-safe; no `DOWN` migration needed). [DESIGN] — IMPLEMENTED
+- Dead-schema avoidance rationale (carried precedent from §§9.4/10.2/12.2): an unwired `.sql` file would be dead schema while `store.ts` owns the migration registry; 004 is therefore wired through the owned registry, not left as a loose file. Prior service-owned ensures (`session_executions`, `usage_ledger`, `lease_fencing_high_water`, `integration_runs`) are unchanged. [DESIGN]
+
+### 14.5 Housekeeping note [PROBE]
+
+One untracked junk file `NUL` sits at the repo root; it is in neither M8 commit file list, is never cited as evidence, and was left untouched. Untracked `NUL` is uncommitted noise, not a committed artifact.
+
+### 14.6 M8-FIX gaps and NOT VERIFIED list (additive to §§5/7.3/8.3/9.5/10.5/11.5/12.5/13.5)
+
+1. Live inference/spend, live server turns, live contention timing, provider 402/401-403 shaping (F-04 carried, not closed), and live kill-tree behavior are NOT VERIFIED (no live server, no inference spend). [PROBE]
+2. Focused/carried/typecheck/full-suite counts (fix rows + 514/0/14054/36, tsc 9/9, frozen-adapter 0) are supplied evidence, not fresh executions of this doc session (link check only). [PROBE]
+3. Codex transport is honestly unbuilt — the four gating items above stay open; no stable-verb, session-identity, model-mapping, or snapshot claim is made. [DESIGN]
+4. Exactly-once physical delivery is not claimed; ambiguous admissions quarantine for operator review by design (TTL-bounded per [m8 qual §10.2](evidence/m8-release-qualification.md#102-s2-closures-supplied-phase-4-re-review-disposition-commit-ready-lanes)). [DESIGN]
+5. No live-server, screenshot, deployment, endpoint, CLI-flag, release, or support-promise claims are made in this addendum. [DESIGN]
