@@ -363,3 +363,49 @@ paid-path autonomy claim. [PROBE]
    quarantine for operator review by design. [DESIGN]
 4. No live-server, screenshot, deployment, endpoint, CLI-flag, release, or
    support-promise claims are made in this addendum. [DESIGN]
+
+## 11. M6 parity-UX compatibility addendum (DOC-M6-01)
+
+> **Document status for this section only: APPROVED CONTRACT + IMPLEMENTED
+> (FakeHarness + disposable-tmp simulations, supplied) / COMMITTED at
+> `817835a` + `ccf0db6`.** Live TUI mounting and live-inference behavior
+> remain **NOT VERIFIED**. §§1–10 above are unchanged M0/M2/M3/M4/M5
+> baseline; nothing below rewrites them. [DESIGN]
+
+- **Baseline:** HEAD `ccf0db6729d7612e48e190b6339276524a096041` —
+  `feat(board-terminal): terminal board fallback (M6-BOARD-COMMIT-01)`; 4 files, 1592 insertions.
+  Prior: `55541b0` (DOC-M5-01) → `817835a` (M6-0103-FIX-REVIEW-01 plugin lane; 8 files, 1737 insertions, 76 deletions) → `ccf0db6` (M6 board lane, HEAD). [PROBE]
+- **Constraint compliance:** M0–M5 files untouched; **no migration file, no protocol change** (no `packages/protocol` file in either commit). The board lane is a new read-only package importing no store, daemon, harness, or ledger writer. [DESIGN]
+- **Evidence:** 51 plugin + 34 board tests PASS (FakeHarness/tmp, supplied), `tsc × 2` clean (supplied); live TUI mount NOT VERIFIED — see [m6-parity-ux evidence](evidence/m6-parity-ux.md) §§3/6 for the per-acceptance map and honest repro scope. [PROBE]
+
+### 11.1 Native slots verified vs fallback [DESIGN]
+
+| Surface | Status in M6 |
+|---|---|
+| Board page | **Native (verified slot):** `UI.router.register({ name: "Swarm Board" })` + `UI.router.navigate({ type: "plugin", name })` (`dist/tui/context.d.ts` router/Page/Route/Destination) — IMPLEMENTED, live mount NOT VERIFIED |
+| Roster/post/detail panes | **Native (verified slot):** `UI.slot({ append: "session.panel" })` + `UI.panel.open(name)` (`SlotMap "session.panel": PanelInput`, `SlotClaim`, context.d.ts) — there is no dedicated board slot, so the board is a router page, never a slot claim |
+| Worker-session navigation | **Native, conditional:** `UI.tabs.focus(sessionID)` first (returns false when tabs disabled), else `UI.router.navigate({ type: "session", sessionID })` — IMPLEMENTED, live navigation NOT VERIFIED |
+| `Alt+S` board shortcut | **Best-effort:** documented `KeymapCommand.bind` slot (`KeymapCommand { id: "swarm.board", bind: "alt+s", palette, slash }`, context.d.ts); OpenTUI owns binding-parse and the host may reject it — palette command + `/swarm board` are the guaranteed equivalents |
+| Read markers / filters / follow | **Native (verified slot):** `Storage.memory("swarm-board", …)` live-synced ephemeral view-state (context.d.ts) + pure helpers |
+| Board reads | **Native transport, fallback data:** `client.rpc(SwarmRpc)` (`RpcApi<D>(definition): RpcClient<D>`); daemon-backed methods return typed `daemon_unwired` until the transport lane injects a reader |
+| Board render | **Fallback:** `solid-js`/`@opentui/*` optional peers NOT installed in `packages/plugin`, so no JSX is compiled in `tui.tsx` — the terminal board (`bunx opencode-swarm board --swarm <id>`, M6-02) is the working surface |
+| Live probes 01–12 | Still NOT VERIFIED — no `probe-NN.log` exists in the repo. M6 simulations close no live probe. [PROBE] |
+
+### 11.2 Versioned RPC schema [DESIGN]
+
+`SwarmRpc` (id `swarm`, wire `swarm/0` / `0.0.1`) exposes exactly three methods (`health`, `boardSnapshot`, `boardPosts`) plus one `board.updated` event, built on `Rpc.define` JSON-schema values only. Every method validates `schemaVersion` fail-closed (`stale_schema`); daemon reads fail closed (`daemon_unwired`); malformed ids and paging fail closed (`invalid_swarm_id`, `invalid_pagination`, limit clamps to 100). No new OpenCode API is assumed: the commit uses only `Plugin.define`, `ctx.command.transform/list/reload`, `ctx.tool.transform`, `ctx.rpc.register`, and the verified TUI slots in §11.1 — see the 14-row supported-API table in [m6-parity-ux](evidence/m6-parity-ux.md) §4. IMPLEMENTED, live transport behavior NOT VERIFIED.
+
+### 11.3 No new OpenCode APIs assumed [DESIGN]
+
+M6 invents no hook: the five unsupported command paths (native board route via command API, `Alt+S` interception, inline `@worker` routing, session deep-link RPC, wake/usage daemon reads) are recorded in `UNSUPPORTED_COMMAND_APIS` / `UNSUPPORTED_DAEMON_READS` with their supported fallbacks and never called. Q-02/Q-08 (spec §18) stay OPEN as live-TUI questions with documented fallbacks; the terminal board is the contract-approved fallback per spec §4.4. Live mount, live key capture, and live navigation remain NOT VERIFIED. [PROBE]
+
+### 11.4 Housekeeping note [PROBE]
+
+One untracked junk file `NUL` sits at the repo root; it is in neither M6 commit, is never cited as evidence, and was left untouched. Untracked `NUL` is uncommitted noise, not a committed artifact.
+
+### 11.5 M6 gaps and NOT VERIFIED list (additive to §§5/7.3/8.3/9.5/10.5)
+
+1. Live TUI mount (needs a plugin-config change this slice must not perform), live turns, provider 402 shaping, spend, and the live 10-minute idle window are NOT VERIFIED (no live server, no TUI host mount, no inference spend). [PROBE]
+2. Focused/typecheck counts (51 + 34, `tsc × 2`) are supplied evidence cited in [m6-parity-ux](evidence/m6-parity-ux.md), not fresh executions of this doc session (link check only). [PROBE]
+3. Exactly-once physical delivery is not claimed; ambiguous admissions quarantine for operator review by design. [DESIGN]
+4. No live-server, screenshot, deployment, endpoint, CLI-flag, release, or support-promise claims are made in this addendum. [DESIGN]
