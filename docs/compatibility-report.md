@@ -276,3 +276,90 @@ paid-path autonomy claim. [PROBE]
 2. Focused/full/typecheck counts (74 + 23 + 13, 246, tsc × 3) and the 136–149 evolution span are supplied evidence cited in [m4-safe-coding](evidence/m4-safe-coding.md), not fresh executions of this doc session (link check only). [PROBE]
 3. Exactly-once physical delivery is not claimed; ambiguous admissions quarantine for operator review by design. [DESIGN]
 4. No live-server, screenshot, deployment, endpoint, CLI-flag, release, or support-promise claims are made in this addendum. [DESIGN]
+
+## 10. M5 robustness compatibility addendum (DOC-M5-01)
+
+> **Document status for this section only: APPROVED CONTRACT + IMPLEMENTED
+> (FakeHarness + tmp-Git/tmp-SQLite simulations) / COMMITTED at `69f40a9`.**
+> Live-server and live-inference behavior remain **NOT VERIFIED**. §§1–9
+> above are unchanged M0/M2/M3/M4 baseline; nothing below rewrites them. [DESIGN]
+
+- **Baseline:** HEAD `69f40a9726876411e77b8f81848e62b2681b6311` —
+  `feat(m5): crash replay + rate limiting (M5-01/M5-02)`; 8 files, 3527
+  insertions, 21 deletions.
+  Prior: `7330e0e` (M4) → `698171b` (DOC-M4-01) → `b54c50c` (m105 cleared) → `c10e0be` (M4-INT-FIX-01, M4 S2-1…S2-3) → `69f40a9` (M5-01/M5-02, HEAD). [PROBE]
+- **Constraint compliance:** only existing-source file touched is
+  `packages/git-workspaces/src/worktree-manager.ts` (M5 fencing delta,
+  `leases`-row contract untouched); **no protocol change** (no
+  `packages/protocol` file in the commit); **no migration file** —
+  `session_executions`, `usage_ledger`, and `lease_fencing_high_water` are
+  service-owned via idempotent `CREATE TABLE IF NOT EXISTS` ensures on the
+  shared DB handle (same precedent as M4-03 `integration_runs`), because
+  `store.ts` and its migration registry are owned by another lane. [DESIGN]
+- **Evidence:** 66 M5 focused tests PASS (19 recovery + 8 crash-replay + 35
+  rate-limit + 4 rate-quota, FakeHarness/tmp-Git/tmp-SQLite, supplied);
+  carried runtime 153+/177 + git-workspaces 74 + verification 23 (supplied);
+  `tsc × 2` clean (supplied); live inference NOT VERIFIED — see
+  [m5-robustness evidence](evidence/m5-robustness.md) §§4/7 for the
+  per-acceptance map and honest repro scope. [PROBE]
+
+### 10.1 No new OpenCode APIs assumed [DESIGN]
+
+| Surface | Status in M5 |
+|---|---|
+| Harness / session / model surface | Unchanged by M5-01/M5-02. The limiter wraps the existing M2 `submitTurn` transport shape (outcome classes over `.status`/`.code`/message) and the recovery service owns no paid path (no harness calls, no inference). No new native method, event, permission, or model ref assumed. [DESIGN] — IMPLEMENTED, live transport behavior NOT VERIFIED |
+| Q-07 (spec §18, quota/rate-limit surfacing) | Still OPEN as a live-provider question, but **decided for implementation**: 402 → quota-paused, 429 → bounded retries then terminal, 401/403 → auth-blocked, all zero-speculative-spend by FakeHarness submit counters. The live provider error shape stays the unproven assumption, not the mechanism. [DESIGN] |
+| Live probes 01–12 | Still NOT VERIFIED — no `probe-NN.log` exists in the repo. M5 simulations close no live probe. [PROBE] |
+
+### 10.2 Service-owned ensures vs migrations (compatibility note) [DESIGN]
+
+- `session_executions` (`recovery.ts`), `usage_ledger` (`usage-ledger.ts`),
+  and `lease_fencing_high_water` (`worktree-manager.ts`) are ensured
+  idempotently on the shared DB handle (`CREATE TABLE IF NOT EXISTS`, safe on
+  every open, safe on legacy DBs that predate the tables). No `.sql`
+  migration file is added because an unwired file would be dead schema —
+  `store.ts` migrations are owned by another lane. DDL/read/write failure in
+  the fencing path is fail-closed (throws), never a silent fallback. [DESIGN] — IMPLEMENTED
+
+### 10.3 Bound notes (no unbounded behavior introduced) [DESIGN]
+
+- Outbox replay: at most `maxPerRun` rows per pass (default 100, hard cap
+  1000), `created_at` order; delivered marked only after consumer ack.
+- Lease CAS: bounded `MAX_CAS_ATTEMPTS = 10` retries; contention loses and
+  retries higher, never spins.
+- 429/transient: bounded exp-backoff (`base * 2^attempts` + full jitter) with
+  retry budget, then terminal exhaustion; throttle queues admit without
+  calling the transport (zero speculative spend).
+- 402 quota: exactly one transport attempt, zero retries, no elapsed-time
+  resume (BlockRegistry; documented triggers only). 401/403 auth: exactly one
+  attempt, zero retries, never auto-approved; traffic triggers cannot clear
+  auth blocks. [DESIGN] — IMPLEMENTED, live timing behavior NOT VERIFIED
+
+### 10.4 Residual list + expiry [DESIGN/PROBE]
+
+- **F-01 (fencing high-water + CAS): ACCEPTED RISK with revisit condition**
+  (supplied M5-01/02 review disposition — not upgraded to PASS here).
+  Simulations prove the mechanism against fakes; live concurrent load and real
+  crash timing are unproven. **Revisit condition:** re-examine F-01 against
+  live-server contention evidence (or a dedicated concurrent-load probe)
+  before any production or release claim. [PROBE]
+- **F-02 (terminal-once outcome): advisory** — covered by FI-7 tests
+  (recorded terminal survives restart + duplicate delivery); filed follow-up,
+  non-blocking. [DESIGN]
+- **S3 lists: deferred** follow-ups, non-blocking for M5 closeout. [DESIGN]
+- **F-04 (harness 402-shape): NOT VERIFIED (carried, not closed).** M5 adds no
+  live provider call; the M2 quota posture is carried unchanged. [PROBE]
+
+### 10.5 M5 gaps and NOT VERIFIED list (additive to §§5/7.3/8.3/9.5)
+
+1. Live turns, overlap figures, provider 402/401-403 shaping, spend, and live
+   crash-timing / concurrent-load behavior are NOT VERIFIED (no live server,
+   no inference spend). [PROBE]
+2. Focused/carried/typecheck counts (66 M5 focused; runtime 153+/177,
+   git-workspaces 74, verification 23; `tsc × 2`) are supplied evidence cited
+   in [m5-robustness](evidence/m5-robustness.md), not fresh executions of this
+   doc session (link check only). [PROBE]
+3. Exactly-once physical delivery is not claimed; ambiguous admissions
+   quarantine for operator review by design. [DESIGN]
+4. No live-server, screenshot, deployment, endpoint, CLI-flag, release, or
+   support-promise claims are made in this addendum. [DESIGN]

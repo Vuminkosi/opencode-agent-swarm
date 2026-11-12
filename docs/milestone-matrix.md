@@ -29,7 +29,8 @@
 | **M2 — Real sleep/wake** | Wake queue + dispatcher + reconciler + events; `delivery_key` UNIQUE + fencing; 402 quota-pause without retry; bounded transient backoff; quarantine-on-ambiguity; idle-zero | **`c62c824`** (M2-01-COMMIT-01) + M2-01-FIX-REVIEW-01 evidence (S2-1/S2-2/F-01) | **PASS: 20 wake + 98 runtime tests (FakeHarness), typecheck clean / live turns NOT VERIFIED / COMMITTED** | [m2-wake-engine](evidence/m2-wake-engine.md) |
 | **M3 — Autonomous team** | Planner, groups, task DAG, verifier, dormant monitor; 26 coordination tests (21 base + S1-01/S1-02/S2-01/02/03 fixes) | **`e7a0b8f`** (M3-01-COMMIT-01; 8 files, 1678 insertions; fixes folded in, no separate fix commit in log) | **PASS: 26 coordination + 124 runtime + 188 repo tests (FakeHarness), typecheck clean / live turns NOT VERIFIED / COMMITTED** | [m3-coordination](evidence/m3-coordination.md) |
 | **M4 — Safe coding** | Worktree manager + path policy + verification runner + serialized CAS integration gate; quota 402 no-retry carried, at-least-once honest | **`7330e0e`** (M4-01/M4-02/M4-03-COMMIT-01; 12 files, 4911 insertions) | **PASS (simulation): 74 + 23 + 13 focused, full 246 observed (FakeHarness/tmp-Git, supplied) / m105 env NOT VERIFIED external / COMMITTED** — S2 follow-ups S2-1…S2-3 + S3 lists filed, non-blocking | [m4-safe-coding](evidence/m4-safe-coding.md) |
-| M5+ — Beyond safe coding | M5–M8 per spec §14 | — | TODO (not started) | [spec](plan/spec.md) §14 |
+| **M5 — Robustness** | Crash replay + rate limiting (M5-01/M5-02): durable leases (fencing high-water + CAS, fail-closed), outbox/session replay, 429 bounded+jitter+budget, 402/401/403 zero follow-up, usage ledger | **`69f40a9`** (M5-01/M5-02-COMMIT-01; 8 files, 3527 insertions) | **PASS (simulation): 19 recovery + 8 crash-replay + 35 rate-limit + 4 rate-quota (FakeHarness/tmp-Git, supplied) / live inference NOT VERIFIED / COMMITTED** — M4 S2-1…S2-3 committed c10e0be, m105 cleared b54c50c, F-01 accepted-risk + revisit | [m5-robustness](evidence/m5-robustness.md) |
+| M6+ — Beyond robustness | M6–M8 per spec §14 | — | TODO (not started) | [spec](plan/spec.md) §14 |
 
 ## M2 gate detail (why M2 is PASS-with-qualification, not fully VERIFIED)
 
@@ -53,4 +54,4 @@
 
 IMPLEMENTED (code-observed) / VERIFIED (executed evidence reviewed) /
 COMMITTED (`c62c824` cited; not a release) / NOT VERIFIED (no live log) /
-TODO (M4+). Live inference stays NOT VERIFIED across all rows.
+TODO (M6+). Live inference stays NOT VERIFIED across all rows.
