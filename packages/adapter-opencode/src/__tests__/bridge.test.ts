@@ -27,6 +27,7 @@ import {
   parseSseFrame,
   subscribeHarnessEvents,
   toHarnessEvent,
+  type SseDropInfo,
 } from "../events.js";
 import type { HarnessEvent } from "../port.js";
 import {
@@ -331,6 +332,205 @@ const preAborted = new AbortController();
 preAborted.abort();
 await subscribeHarnessEvents(fakeA, { sessionIds: ["x"], handler: () => {}, signal: preAborted.signal });
 check("pre-aborted subscription resolves without transport", true);
+
+// DEBUG-SSE-01: subscription rejection is caller-observable (HTTP-400).
+let rejected400 = "";
+try {
+  await subscribeHarnessEvents(fakeA, {
+    sessionIds: ["ses_fake_A"],
+    handler: () => {},
+    signal: new AbortController().signal,
+    fetchImpl: (async () =>
+      new Response("bad request", { status: 400, headers: { "content-type": "text/event-stream" } })) as typeof fetch,
+  });
+} catch (err) {
+  rejected400 = err instanceof Error ? err.message : String(err);
+}
+check("HTTP-400 subscription rejects caller-observably", rejected400.includes("http 400"), rejected400);
+
+// DEBUG-SSE-01: unknown session key is a reported drop (counter + last raw
+// type via onDrop), never a silent swallow and never a handler call.
+const drops: SseDropInfo[] = [];
+const seenOther: HarnessEvent[] = [];
+await subscribeHarnessEvents(fakeA, {
+  sessionIds: ["ses_fake_A"],
+  handler: (e) => {
+    seenOther.push(e);
+  },
+  signal: new AbortController().signal,
+  fetchImpl: (async () =>
+    new Response(
+      'event: session.execution.started\ndata: {"type":"session.execution.started","properties":{"sessionID":"ses_unknown"}}\n\n',
+      { headers: { "content-type": "text/event-stream" } },
+    )) as typeof fetch,
+  onDrop: (d) => {
+    drops.push(d);
+  },
+});
+check("unknown session key reported via onDrop", drops.length === 1, `drops=${drops.length}`);
+check(
+  "drop carries counter + last raw type",
+  drops[0]?.droppedTotal === 1 && drops[0]?.lastRawType === "session.execution.started",
+  JSON.stringify(drops[0] ?? null),
+);
+check("unwatched session never reaches the handler", seenOther.length === 0);
+// Default (no onDrop) preserves the current behavior: silent filter, no throw.
+const seenDefault: HarnessEvent[] = [];
+await subscribeHarnessEvents(fakeA, {
+  sessionIds: ["ses_fake_A"],
+  handler: (e) => {
+    seenDefault.push(e);
+  },
+  signal: new AbortController().signal,
+  fetchImpl: (async () =>
+    new Response(
+      'event: session.execution.started\ndata: {"type":"session.execution.started","properties":{"sessionID":"ses_unknown"}}\n\n',
+      { headers: { "content-type": "text/event-stream" } },
+    )) as typeof fetch,
+});
+check("no-onDrop path still filters without throwing", seenDefault.length === 0);
+
+// DEBUG-SSE-01: dispatch-before-connect on a volatile stream. The turn payload
+// below is dispatched (exists) before subscribeHarnessEvents attaches; proof E
+// is gated on the "subscription connected" signal (first observed frame) and
+// fails LOUDLY when that signal never fires (blackout), never a silent
+// 0-event PASS. (A WHATWG ReadableStream buffers, so true packet loss is a
+// live-only property; what is deterministic here is the caller-side gate.)
+let connectedFired: boolean = false;
+const seenGate: HarnessEvent[] = [];
+await subscribeHarnessEvents(fakeA, {
+  sessionIds: ["ses_gate"],
+  handler: (e) => {
+    connectedFired = true;
+    seenGate.push(e);
+  },
+  signal: new AbortController().signal,
+  fetchImpl: (async () =>
+    new Response(
+      'event: session.execution.succeeded\ndata: {"type":"session.execution.succeeded","properties":{"sessionID":"ses_gate","executionID":"exe_gate"}}\n\n',
+      { headers: { "content-type": "text/event-stream" } },
+    )) as typeof fetch,
+});
+check("subscription connected signal fires on first frame", connectedFired);
+check(
+  "post-connect proof observes the terminal event",
+  seenGate.length === 1 && seenGate[0]?.nativeExecutionId === "exe_gate",
+  `seen=${seenGate.length}`,
+);
+// Blackout twin: the stream closes with zero frames and the (polling-based)
+// wait still resolves — the gate must refuse the proof loudly.
+const seenBlackout: HarnessEvent[] = [];
+let blackoutConnected: boolean = false;
+await subscribeHarnessEvents(fakeA, {
+  sessionIds: ["ses_gate"],
+  handler: (e) => {
+    blackoutConnected = true;
+    seenBlackout.push(e);
+  },
+  signal: new AbortController().signal,
+  fetchImpl: (async () => new Response("", { headers: { "content-type": "text/event-stream" } })) as typeof fetch,
+});
+check("blackout stream resolves with zero frames (no silent hang)", seenBlackout.length === 0 && !blackoutConnected);
+let blackoutGate = "";
+try {
+  // Mirrors the harness SSE_ZERO_FRAMES gate: first wait resolved, zero
+  // frames observed, zero rejections — refuse the proof loudly.
+  if (seenBlackout.length === 0) throw new Error("SSE_ZERO_FRAMES: first wait resolved with zero SSE frames observed (rejections=0)");
+} catch (err) {
+  blackoutGate = err instanceof Error ? err.message : String(err);
+}
+check("zero-frame proof fails loudly (SSE_ZERO_FRAMES)", blackoutGate.includes("SSE_ZERO_FRAMES"), blackoutGate);
+
+// LIVE-HARNESS-FIX-E03: typeless `data:` envelopes (live 2.2.7 shape — inner
+// `type` names, ZERO `event:`-keyed lines) map exactly as the typed form.
+const typelessStarted = parseSseFrame(
+  'data: {"type":"session.execution.started","properties":{"sessionID":"ses_fake_A","executionID":"exe_t1"}}\n',
+);
+check("typeless execution.started parses via inner type", typelessStarted?.type === "session.execution.started");
+const typelessEv = typelessStarted === null ? null : toHarnessEvent(typelessStarted, FIXED_NOW);
+check(
+  "typeless execution.started maps with session + execution id",
+  typelessEv?.sessionId === "ses_fake_A" && typelessEv?.nativeExecutionId === "exe_t1",
+);
+// Typeless subscription: started/failed/usage.updated map with counts.
+const seenTypeless: HarnessEvent[] = [];
+await subscribeHarnessEvents(fakeA, {
+  sessionIds: ["ses_fake_A"],
+  handler: (e) => {
+    seenTypeless.push(e);
+  },
+  signal: new AbortController().signal,
+  fetchImpl: (async () =>
+    new Response(
+      'data: {"type":"session.execution.started","properties":{"sessionID":"ses_fake_A"}}\n\n' +
+        'data: {"type":"session.execution.failed","properties":{"sessionID":"ses_fake_A"}}\n\n' +
+        'data: {"type":"session.usage.updated","properties":{"sessionID":"ses_fake_A"}}\n\n',
+      { headers: { "content-type": "text/event-stream" } },
+    )) as typeof fetch,
+});
+check("typeless started/failed/usage.updated map with counts", seenTypeless.length === 3, `seen=${seenTypeless.length}`);
+check(
+  "typeless mapped types preserve inner names",
+  seenTypeless.map((e) => e.type).join(",") === "session.execution.started,session.execution.failed,session.usage.updated",
+  seenTypeless.map((e) => e.type).join(","),
+);
+// Typeless unknown-inner-type → onDrop (not silent, not mapped).
+const seenUnknownInner: HarnessEvent[] = [];
+const dropsUnknownInner: SseDropInfo[] = [];
+await subscribeHarnessEvents(fakeA, {
+  sessionIds: ["ses_fake_A"],
+  handler: (e) => {
+    seenUnknownInner.push(e);
+  },
+  signal: new AbortController().signal,
+  fetchImpl: (async () =>
+    new Response('data: {"type":"server.connected","properties":{}}\n\n', {
+      headers: { "content-type": "text/event-stream" },
+    })) as typeof fetch,
+  onDrop: (d) => {
+    dropsUnknownInner.push(d);
+  },
+});
+check("typeless unknown-inner-type reported via onDrop", dropsUnknownInner.length === 1, `drops=${dropsUnknownInner.length}`);
+check(
+  "unknown-inner-type reason distinguished",
+  dropsUnknownInner[0]?.reason === "unknown-inner-type" && dropsUnknownInner[0]?.lastRawType === "server.connected",
+  JSON.stringify(dropsUnknownInner[0] ?? null),
+);
+check("unknown-inner-type never reaches the handler", seenUnknownInner.length === 0);
+// Mixed typed + typeless stream maps both forms.
+const seenMixed: HarnessEvent[] = [];
+await subscribeHarnessEvents(fakeA, {
+  sessionIds: ["ses_fake_A"],
+  handler: (e) => {
+    seenMixed.push(e);
+  },
+  signal: new AbortController().signal,
+  fetchImpl: (async () =>
+    new Response(
+      'event: session.execution.started\ndata: {"type":"session.execution.started","properties":{"sessionID":"ses_fake_A"}}\n\n' +
+        'data: {"type":"session.execution.failed","properties":{"sessionID":"ses_fake_A"}}\n\n',
+      { headers: { "content-type": "text/event-stream" } },
+    )) as typeof fetch,
+});
+check(
+  "mixed typed+typeless stream maps both",
+  seenMixed.length === 2 &&
+    seenMixed[0]?.type === "session.execution.started" &&
+    seenMixed[1]?.type === "session.execution.failed",
+  `seen=${seenMixed.length}`,
+);
+// Keepalive comment still ignored (no handler call, no hang).
+const seenKeepalive: HarnessEvent[] = [];
+await subscribeHarnessEvents(fakeA, {
+  sessionIds: ["ses_fake_A"],
+  handler: (e) => {
+    seenKeepalive.push(e);
+  },
+  signal: new AbortController().signal,
+  fetchImpl: (async () => new Response(": keepalive\n\n", { headers: { "content-type": "text/event-stream" } })) as typeof fetch,
+});
+check("keepalive comment still ignored", seenKeepalive.length === 0);
 
 // Overlap analysis incl. evidence-grade timestamps.
 check(

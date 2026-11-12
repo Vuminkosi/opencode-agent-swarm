@@ -112,7 +112,13 @@ export function parseSseFrame(frame: string): RawSseEvent | null {
     if (line.startsWith("event:")) type = line.slice("event:".length).trim();
     else if (line.startsWith("data:")) dataLines.push(line.slice("data:".length).trim());
   }
-  if (type === "") return null;
+  if (type === "") {
+    // LIVE-HARNESS-FIX-E03 (F-EXEC17-01, live-observed): disposable
+    // `opencode serve` 2.2.7 emits lifecycle as TYPELESS `data:` JSON
+    // envelopes with an inner `type` name and ZERO `event:`-keyed lines.
+    // Map those via the inner type exactly as the typed form below.
+    return parseTypelessPayload(dataLines);
+  }
   const text = dataLines.join("\n").trim();
   if (text === "" || text === "[DONE]") return null;
   let properties: Record<string, unknown>;
@@ -135,6 +141,53 @@ export function parseSseFrame(frame: string): RawSseEvent | null {
 }
 
 /**
+ * LIVE-HARNESS-FIX-E03: parse a typeless frame (no `event:` line) via the
+ * inner `type` of its `data:` JSON payload. Returns the same RawSseEvent
+ * shape as the typed form so downstream mapping (session-key extraction via
+ * toHarnessEvent, subscription allowlist, onDrop diagnostics) applies
+ * unchanged. Returns null for keepalive comments, empty/`[DONE]` payloads,
+ * unparseable JSON, and payloads without a string inner `type` — the caller
+ * reports those as `unparseable-frame` drops, exactly like before.
+ */
+function parseTypelessPayload(dataLines: readonly string[]): RawSseEvent | null {
+  const text = dataLines.join("\n").trim();
+  if (text === "" || text === "[DONE]") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const record = asRecord(parsed);
+  if (record === null) return null;
+  const innerType = asString(record["type"]);
+  if (innerType === null || innerType === "") return null;
+  const envelope = asRecord(record["properties"]);
+  return { type: innerType, properties: envelope ?? record };
+}
+
+/**
+ * Dropped-frame diagnostics (DEBUG-SSE-01). Volatile-stream drops are
+ * otherwise silent: unparseable frames, session-less envelopes, and events
+ * for unwatched sessions never reach the handler. When `onDrop` is set it is
+ * invoked once per dropped frame with a running counter and the last raw
+ * event type (`null` when the frame carried no parseable type). Default
+ * `undefined` preserves the current behavior exactly (no filter change).
+ *
+ * LIVE-HARNESS-FIX-E03: `reason` distinguishes the drop class. Existing
+ * callers keep working — `droppedTotal`/`lastRawType` semantics are unchanged;
+ * `unknown-inner-type` is new (inner `type` outside the subscription
+ * allowlist, e.g. live-observed `server.connected` on a typeless envelope).
+ */
+export type SseDropReason = "unparseable-frame" | "unknown-inner-type" | "sessionless-envelope" | "unwatched-session";
+
+export interface SseDropInfo {
+  readonly droppedTotal: number;
+  readonly lastRawType: string | null;
+  readonly reason: SseDropReason;
+}
+
+/**
  * Volatile SSE subscription. Resolves when the signal aborts; rejects only
  * on transport failure. Reconnect = call again AFTER reconciling via
  * getSession (probe 08 pattern). [OC2-REST: event.subscribe]
@@ -147,6 +200,7 @@ export async function subscribeHarnessEvents(
     readonly handler: (event: HarnessEvent) => void;
     readonly signal: AbortSignal;
     readonly fetchImpl?: typeof fetch;
+    readonly onDrop?: (drop: SseDropInfo) => void;
   },
 ): Promise<void> {
   if (opts.signal.aborted) return;
@@ -169,6 +223,23 @@ export async function subscribeHarnessEvents(
   const decoder = new TextDecoder();
   const watch = new Set(opts.sessionIds);
   let buf = "";
+  // LIVE-HARNESS-FIX-E03: the subscription allowlist (query `types=` above)
+  // applies equally to typed and typeless frames — same vocabulary, same
+  // onDrop diagnostics. Unknown inner types are reported drops, never silent
+  // and never mapped.
+  const allowed = new Set<string>(opts.types ?? HARNESS_EVENT_TYPES);
+  // DEBUG-SSE-01: dropped frames are otherwise silent (a blackout looks like
+  // "no events"). Count every drop and report the last raw type through the
+  // optional onDrop hook; diagnostics must never break the stream.
+  let droppedTotal = 0;
+  const noteDrop = (lastRawType: string | null, reason: SseDropReason): void => {
+    droppedTotal += 1;
+    try {
+      opts.onDrop?.({ droppedTotal, lastRawType, reason });
+    } catch {
+      /* drop diagnostics stay best-effort */
+    }
+  };
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -179,9 +250,23 @@ export async function subscribeHarnessEvents(
         const frame = buf.slice(0, idx);
         buf = buf.slice(idx + 2);
         const raw = parseSseFrame(frame);
-        if (raw === null) continue;
+        if (raw === null) {
+          noteDrop(null, "unparseable-frame");
+          continue;
+        }
+        if (!allowed.has(raw.type)) {
+          noteDrop(raw.type, "unknown-inner-type");
+          continue;
+        }
         const mapped = toHarnessEvent(raw, new Date().toISOString());
-        if (mapped === null || !watch.has(mapped.sessionId)) continue;
+        if (mapped === null) {
+          noteDrop(raw.type, "sessionless-envelope");
+          continue;
+        }
+        if (!watch.has(mapped.sessionId)) {
+          noteDrop(raw.type, "unwatched-session");
+          continue;
+        }
         opts.handler(mapped);
       }
       if (opts.signal.aborted) break;

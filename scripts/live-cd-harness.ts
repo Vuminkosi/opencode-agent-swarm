@@ -350,6 +350,50 @@ export function findFreePort(): Promise<number> {
   });
 }
 
+/** Terminal-outcome classifier for the exactly-one-turn proof (F-EXEC13-E01).
+ *
+ * A real successful model turn legitimately emits MULTIPLE messages
+ * (assistant text + tool calls + follow-ups), so raw `message.list` delta
+ * is informational only. What must be exactly one per admitted wake is the
+ * TERMINAL execution outcome: one `session.execution.succeeded` or
+ * `session.execution.failed` event. `interrupted` is intentionally NOT a
+ * counted outcome (it is an abort, exit 3 — never a proof PASS).
+ * Duplicate/unrelated wakes must produce ZERO new terminal outcomes. */
+export function isTerminalOutcomeEvent(type: string): boolean {
+  return type === "session.execution.succeeded" || type === "session.execution.failed";
+}
+
+/** Count terminal execution outcomes (succeeded/failed only) in an event list. */
+export function countTerminalOutcomes(events: readonly { readonly type: string }[]): number {
+  let n = 0;
+  for (const e of events) {
+    if (isTerminalOutcomeEvent(e.type)) n += 1;
+  }
+  return n;
+}
+
+/** Count terminal outcomes for one session in a ledger since a mark index. */
+export function countTerminalOutcomesSince(
+  ledger: readonly { readonly type: string; readonly sessionId: string }[],
+  sessionId: string,
+  since: number,
+): number {
+  let n = 0;
+  for (let i = since; i < ledger.length; i += 1) {
+    const e = ledger[i] as { readonly type: string; readonly sessionId: string };
+    if (e.sessionId === sessionId && isTerminalOutcomeEvent(e.type)) n += 1;
+  }
+  return n;
+}
+
+/** Best-effort disposable-server teardown descriptor (OPS01 S3).
+ * Bun `kill()` can leave the spawned server alive; the fallback force-kills
+ * the PID tree (`taskkill /F /T` equivalent). Pure argv builder so the shape
+ * is synthetically provable with zero inference. */
+export function teardownForceKillArgs(pid: number): readonly string[] {
+  return ["taskkill", "/F", "/T", "/PID", String(pid)];
+}
+
 /** Overlap check mirroring the canonical executionsOverlap (open intervals). */
 export function intervalsOverlap(
   a: { readonly startedAt: string; readonly terminalAt: string | null },
@@ -686,8 +730,8 @@ function usage(): string {
     `  --root <p>        Disposable root override (must be under tmp; validated in dry-run too).`,
     `  --self-test <n>   Zero-inference synthetic guard proof: unsafe|ceiling exit 3`,
     `                    when the guard fires (proves the abort path); abort|`,
-    `                    cost-shape exit 0 on PASS, 1 on FAIL (second-gate,`,
-    `                    deep-cost + ledger-order assertions).`,
+    `                    cost-shape|terminal|sse exit 0 on PASS, 1 on FAIL (second-gate,`,
+    `                    deep-cost + ledger-order, terminal-outcome-count, zero-wire-gate assertions).`,
     ``,
     `Arg discipline: unknown flags are a usage error (exit 2); when a flag is`,
     `repeated, the FIRST occurrence wins.`,
@@ -759,8 +803,8 @@ function parseArgs(argv: readonly string[]): Options {
     throw new Error(`--work-seconds must be within 60-90 (got ${workSeconds})`);
   }
   const selfTestRaw = get("--self-test");
-  if (selfTestRaw !== null && selfTestRaw !== "unsafe" && selfTestRaw !== "ceiling" && selfTestRaw !== "abort" && selfTestRaw !== "cost-shape") {
-    throw new Error(`--self-test must be unsafe|ceiling|abort|cost-shape (got ${selfTestRaw})`);
+  if (selfTestRaw !== null && selfTestRaw !== "unsafe" && selfTestRaw !== "ceiling" && selfTestRaw !== "abort" && selfTestRaw !== "cost-shape" && selfTestRaw !== "terminal" && selfTestRaw !== "sse") {
+    throw new Error(`--self-test must be unsafe|ceiling|abort|cost-shape|terminal|sse (got ${selfTestRaw})`);
   }
   return {
     help: argv.includes("--help"),
@@ -797,7 +841,7 @@ function wakePlan(): readonly PlanStep[] {
     { n: 4, op: "WakeQueue.enqueue", detail: "one durable wake intent per live @mentioned member (delivery_key idempotent)" },
     { n: 5, op: "WakeDispatcher.dispatchWake", detail: "real harness submitTurn queue-only; externalId in-band metadata only" },
     { n: 6, op: "event.subscribe", detail: "capture session/execution events + timestamps to disposable ledger (verified op)" },
-    { n: 7, op: "proof: exactly-one-turn", detail: "message.list delta == 1 for the woken member" },
+    { n: 7, op: "proof: exactly-one-terminal-outcome", detail: "ONE session.execution.succeeded/failed per admitted wake (message-list delta reported informational only — a real turn emits multiple messages)" },
     { n: 8, op: "proof: duplicate->no-extra-turn", detail: "replay same idempotencyKey => deduped:true, wakeIds empty, turns delta 0" },
     { n: 9, op: "proof: unrelated->no-wake", detail: "mention-free post => zero new wake intents, turns delta 0" },
     { n: 10, op: "proof: identity", detail: "session/agent ids match registry from step 1-2 through terminal events" },
@@ -859,6 +903,9 @@ function dryRun(opts: Options): number {
   checks.push(["abort second-gate holds (swallowed SSE abort refuses submit)", syntheticAbortGateHolds()]);
   checks.push(["live-model override gate + exact-ref + fail-closed", syntheticLiveModelHolds()]);
   checks.push(["disposable `..`-traversal refused (F-B-01 resolve-before-prefix)", syntheticDisposableTraversalHolds()]);
+  checks.push(["exactly-one-terminal-outcome counting (5 msgs/1 terminal PASS, 2 terminals FAIL, dupe 0)", syntheticTerminalCountHolds()]);
+  checks.push(["teardown force-kill fallback argv (taskkill /F /T)", syntheticTeardownFallbackHolds()]);
+  checks.push(["zero-wire blackout trips loudly; idle-with-drops stays quiet", syntheticSseZeroFramesHolds()]);
   checks.push(["deep cost-shape extraction + unknown-shape 0 + string-499", syntheticCostShapeHolds()]);
   checks.push(["ledger close-after-final-log order", syntheticLedgerOrderHolds()]);
   checks.push([
@@ -990,6 +1037,66 @@ export function syntheticCostShapeHolds(): boolean {
   );
 }
 
+/** F-EXEC13-E01: fake transcript 5 msgs / 1 terminal -> PASS; 2 terminals
+ * -> FAIL (exactly-one violated); duplicate wake -> 0 new terminals. */
+export function syntheticTerminalCountHolds(): boolean {
+  const admitted = [
+    { type: "message.created" },
+    { type: "message.created" },
+    { type: "tool.call" },
+    { type: "message.created" },
+    { type: "message.created" },
+    { type: "session.execution.succeeded" },
+  ];
+  const doubleTerminal = [...admitted, { type: "session.execution.failed" }];
+  const duplicateWake: readonly { readonly type: string }[] = [];
+  const interruptedOnly = [{ type: "session.execution.interrupted" }];
+  return (
+    countTerminalOutcomes(admitted) === 1 && // 5 msgs, 1 terminal -> PASS
+    countTerminalOutcomes(doubleTerminal) !== 1 && // 2 terminals -> FAIL
+    countTerminalOutcomes(duplicateWake) === 0 && // duplicate -> 0 terminals
+    countTerminalOutcomes(interruptedOnly) === 0 // interrupt is abort, not PASS
+  );
+}
+
+/** OPS01 S3: the force-kill fallback argv is exactly `taskkill /F /T /PID <pid>`. */
+export function syntheticTeardownFallbackHolds(): boolean {
+  const args = teardownForceKillArgs(1234);
+  return args.join(" ") === "taskkill /F /T /PID 1234";
+}
+
+/** DEBUG-SSE-01 + F-EXEC19-E01: loud zero-wire gate (pure; shared by live
+ * paths + self-test).
+ *
+ * The wait() receipt reconciles via polling, so it can resolve with ZERO
+ * mapped handler invocations. That is ambiguous: a healthy idle stream
+ * (keepalives + `server.connected`, all correctly filtered by the adapter
+ * allowlist) yields frames==0 with drops>0, while a true blackout (HTTP-400
+ * subscription, dispatch-before-connect on the volatile stream) yields
+ * frames==0 AND drops==0 despite HTTP 200. Only the latter fails loudly
+ * with a diagnosed cause — never a silent 0-event proof. Returns the fail
+ * detail when the gate trips, null when the wire is alive (≥1 mapped frame
+ * or ≥1 adapter-filtered drop). */
+export function sseBlackoutDetail(framesObserved: number, framesDropped: number, subsRejected: number): string | null {
+  if (framesObserved > 0) return null;
+  if (framesDropped > 0) return null;
+  return (
+    `first wait resolved with zero wire-classified activity (frames=0 dropped=0 rejections=${subsRejected}); ` +
+    `event-stream blackout — failing loudly instead of a silent 0-event proof`
+  );
+}
+
+/** DEBUG-SSE-01 + F-EXEC19-E01: true zero-wire blackout trips the gate
+ * (rejections diagnosed); ≥1 mapped frame stays quiet; idle-with-drops
+ * (keepalives/`server.connected` correctly filtered) stays quiet. */
+export function syntheticSseZeroFramesHolds(): boolean {
+  const tripsOnBlackout = sseBlackoutDetail(0, 0, 0) !== null;
+  const rejectionDiagnosed = (sseBlackoutDetail(0, 0, 1) ?? "").indexOf("rejections=1") >= 0;
+  const quietWithFrames = sseBlackoutDetail(1, 0, 0) === null;
+  const quietIdleWithDrops = sseBlackoutDetail(0, 3, 0) === null;
+  return tripsOnBlackout && rejectionDiagnosed && quietWithFrames && quietIdleWithDrops;
+}
+
 /** F-B-01: `<root>/../escape.db` (both slash styles) must be refused by the
  * resolve-before-prefix guard — norm-only prefix comparison accepts it. */
 export function syntheticDisposableTraversalHolds(): boolean {
@@ -1080,6 +1187,16 @@ function runSyntheticSelfTest(kind: string): number {
     }
     console.error("synthetic-unsafe FAILED: guard misclassified a synthetic ask");
     return 1;
+  }
+  if (kind === "terminal") {
+    const holds = syntheticTerminalCountHolds();
+    console.log(`synthetic-terminal: 5-msgs/1-terminal ${holds ? "PASS" : "FAIL"} — exactly ONE succeeded/failed per admitted wake; 2 terminals FAIL; duplicate wake 0 terminals`);
+    return holds ? 0 : 1;
+  }
+  if (kind === "sse") {
+    const holds = syntheticSseZeroFramesHolds();
+    console.log(`synthetic-sse: zero-wire gate ${holds ? "PASS" : "FAIL"} — true blackout (frames=0 dropped=0) trips SSE_ZERO_FRAMES loudly (rejections diagnosed); ≥1 frame or idle-with-drops stays quiet`);
+    return holds ? 0 : 1;
   }
   if (kind === "abort") {
     const holds = syntheticAbortGateHolds();
@@ -1212,6 +1329,36 @@ function checkAborted(ctx: LiveContext): void {
   }
 }
 
+/** OPS01 S3 teardown: graceful kill first, then force-kill the PID tree
+ * (`taskkill /F /T` equivalent) when Bun kill() leaves the disposable
+ * server alive. Best-effort; every attempt is logged. */
+function teardownSpawned(
+  spawned: { kill?: () => void; pid?: number } | null,
+  ledger: Ledger,
+  scope: string,
+): void {
+  if (spawned === null) return;
+  try {
+    spawned.kill?.();
+  } catch {
+    /* fall through to the force-kill fallback below */
+  }
+  const pid = spawned.pid;
+  if (typeof pid === "number" && Number.isInteger(pid) && pid > 0) {
+    try {
+      Bun.spawn(teardownForceKillArgs(pid), {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      logLine(ledger, scope, `spawned disposable server force-kill fallback attempted (taskkill /F /T pid=${pid})`);
+      return;
+    } catch {
+      /* best-effort; fall through to the plain killed line */
+    }
+  }
+  logLine(ledger, scope, "spawned disposable server killed");
+}
+
 /** Abort-aware sleep: resolves early when the global deadline fires. */
 function sleepBounded(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
@@ -1308,7 +1455,7 @@ async function liveMain(opts: Options): Promise<number> {
   // closes then returns 2; throws close then rethrow so main's catch maps
   // to exit 1 with the trail preserved and no leaked handle).
   let baseUrl: string;
-  let spawned: { kill?: () => void } | null = null;
+  let spawned: { kill?: () => void; pid?: number } | null = null;
   try {
     if (opts.serverUrl !== null) {
       assertIsolatedServerUrl(opts.serverUrl);
@@ -1320,7 +1467,7 @@ async function liveMain(opts: Options): Promise<number> {
         cwd: repoDir,
         stdout: "ignore",
         stderr: "ignore",
-      }) as unknown as { kill?: () => void };
+      }) as unknown as { kill?: () => void; pid?: number };
       spawned = proc;
       baseUrl = `http://127.0.0.1:${port}`;
       // Give the server a beat, then verify via a VERIFIED op (agent.list), not /health.
@@ -1332,11 +1479,7 @@ async function liveMain(opts: Options): Promise<number> {
     }
     assertIsolatedServerUrl(baseUrl);
   } catch (err) {
-    try {
-      spawned?.kill?.();
-    } catch {
-      /* best-effort teardown of a half-spawned disposable server */
-    }
+    teardownSpawned(spawned, ledger, scope);
     closeLedgerAfterFinalLog(
       ledger,
       scope,
@@ -1485,9 +1628,31 @@ async function liveMain(opts: Options): Promise<number> {
   timeoutSignal.addEventListener("abort", onTimeout, { once: true });
   const startedAt = new Map<string, string>();
   const terminalAt = new Map<string, string>();
+  // F-EXEC13-E01: every terminal OUTCOME (succeeded/failed) per session, in
+  // arrival order — the exactly-one proof counts these, not message verbosity.
+  const terminalOutcomes: Array<{ sessionId: string; type: string; at: string }> = [];
+  // DEBUG-SSE-01 + F-EXEC19-E01: SSE observability — every mapped frame is
+  // counted, the first frame per session is logged as subscription
+  // establishment, and any subscription rejection is logged with its cause.
+  // Adapter-filtered frames (keepalives, `server.connected`, unwatched
+  // sessions — all correctly excluded by the frozen events.ts allowlist) are
+  // counted via onDrop into framesDropped: a healthy idle stream shows
+  // frames==0 with drops>0. Only a run whose first wait() resolves with zero
+  // wire-classified activity (frames==0 AND drops==0) fails loudly
+  // (SSE_ZERO_FRAMES via sseBlackoutDetail) — never a silent 0-event proof.
+  // Per-drop ledger logging is deliberately omitted: keepalives are frequent
+  // and the ledger is the audit trail, not a packet dump.
+  const sseHealth = { framesObserved: 0, framesDropped: 0, subsRejected: 0 };
+  const establishedSessions = new Set<string>();
   const recordEvent = (e: { type: string; sessionId: string; at: string; nativeExecutionId: string | null; payload: unknown }): void => {
+    sseHealth.framesObserved += 1;
+    if (!establishedSessions.has(e.sessionId)) {
+      establishedSessions.add(e.sessionId);
+      logLine(ledger, "event", `subscription established (first frame) session=${e.sessionId} type=${e.type}`);
+    }
     logLine(ledger, "event", `${e.type} at=${e.at}`);
     if (e.type === "session.execution.started" && !startedAt.has(e.sessionId)) startedAt.set(e.sessionId, e.at);
+    if (isTerminalOutcomeEvent(e.type)) terminalOutcomes.push({ sessionId: e.sessionId, type: e.type, at: e.at });
     const terminal =
       e.type === "session.execution.succeeded" ||
       e.type === "session.execution.failed" ||
@@ -1506,9 +1671,42 @@ async function liveMain(opts: Options): Promise<number> {
       }
     }
   };
+  // F-EXEC19-E01: subscribe through the canonical adapter events module
+  // (verified event.subscribe op) with the adapter's onDrop threaded in, so
+  // correctly-filtered frames are counted per run. Parameters mirror the
+  // OpenCodeHarness facade exactly (same transport, default type allowlist,
+  // same handler) — the only deliberate delta is that the facade's private
+  // nativeExecutionId cache is not seeded here. That field flows only into
+  // wait()'s ExecutionRecord.nativeExecutionId, which this harness never
+  // reads (only outcome/externalId/observedAt are consumed below), so no
+  // proof, gate, or ledger line changes. The adapter facade is untouched.
+  const subscribeHarnessEvents = ctx.events["subscribeHarnessEvents"] as (
+    transport: unknown,
+    opts: {
+      readonly sessionIds: readonly string[];
+      readonly handler: (event: {
+        type: string;
+        sessionId: string;
+        at: string;
+        nativeExecutionId: string | null;
+        payload: unknown;
+      }) => void;
+      readonly signal: AbortSignal;
+      readonly onDrop?: (drop: { readonly droppedTotal: number }) => void;
+    },
+  ) => Promise<void>;
   const subs = [coordSession, workerA, workerB].map((s) =>
-    inner.subscribeSessionEvents(s, recordEvent, stopSubs.signal).catch((err: unknown) => {
+    subscribeHarnessEvents(transport, {
+      sessionIds: [s],
+      handler: recordEvent,
+      signal: stopSubs.signal,
+      onDrop: (drop) => {
+        sseHealth.framesDropped = drop.droppedTotal;
+      },
+    }).catch((err: unknown) => {
       if ((stopSubs.signal as AbortSignal).aborted) return;
+      sseHealth.subsRejected += 1;
+      logLine(ledger, "event", `subscription rejected session=${s} (${redact(err instanceof Error ? err.message : String(err))})`);
       throw err;
     }),
   );
@@ -1555,10 +1753,10 @@ async function liveMain(opts: Options): Promise<number> {
       fail(ctx, "LIVE_MODEL_UNRESOLVABLE", err instanceof Error ? err.message : String(err));
     }
     if (opts.mode === "wake" || opts.mode === "both") {
-      await runWakeProofs(ctx, queue, dispatcher, inner, swarm.id, lead, coderOne, note);
+      await runWakeProofs(ctx, queue, dispatcher, inner, swarm.id, lead, coderOne, note, terminalOutcomes, sseHealth);
     }
     if (opts.mode === "overlap" || opts.mode === "both") {
-      await runOverlap(ctx, inner, workerA, workerB, note, startedAt, terminalAt);
+      await runOverlap(ctx, inner, workerA, workerB, note, startedAt, terminalAt, sseHealth);
     }
   } catch (err) {
     if (ctx.aborted !== null) {
@@ -1577,12 +1775,7 @@ async function liveMain(opts: Options): Promise<number> {
     stopSubs.abort();
     timeoutSignal.removeEventListener("abort", onTimeout);
     if (spawned !== null) {
-      try {
-        spawned.kill?.();
-      } catch {
-        /* best-effort teardown of the disposable server */
-      }
-      logLine(ledger, scope, "spawned disposable server killed");
+      teardownSpawned(spawned, ledger, scope);
     }
     await Promise.allSettled(subs);
     try {
@@ -1632,20 +1825,43 @@ async function runWakeProofs(
   lead: { id: string },
   coderOne: { id: string; sessionId?: string },
   note: (check: string, pass: boolean, detail: string) => void,
+  terminalOutcomes: ReadonlyArray<{ sessionId: string; type: string; at: string }>,
+  sse: { readonly framesObserved: number; readonly framesDropped: number; readonly subsRejected: number },
 ): Promise<void> {
+  const sessionId = coderOne.sessionId as string;
   const publishPost = ctx.board["publishPost"] as (store: unknown, input: Record<string, unknown>) => {
     post: { sequence: number };
     deduped: boolean;
     wakeIds: readonly string[];
   };
-  const messageCount = async (sessionId: string): Promise<number> => {
-    const list = (await inner.manager.listMessages(sessionId)) as unknown[];
+  const messageCount = async (id: string): Promise<number> => {
+    const list = (await inner.manager.listMessages(id)) as unknown[];
     return list.length;
   };
+  // Terminal outcomes land via SSE; the wait receipt only proves the backend
+  // went terminal. Poll briefly (bounded by the global deadline) so delivery
+  // lag cannot flake the exactly-one count.
+  const awaitTerminalDelta = async (mark: number, timeoutMs: number): Promise<number> => {
+    const start = Date.now();
+    let delta = 0;
+    for (;;) {
+      delta = 0;
+      for (let i = mark; i < terminalOutcomes.length; i += 1) {
+        const e = terminalOutcomes[i] as { sessionId: string; type: string };
+        if (e.sessionId === sessionId && isTerminalOutcomeEvent(e.type)) delta += 1;
+      }
+      if (delta >= 1 || ctx.deadline.aborted || Date.now() - start >= timeoutMs) return delta;
+      await sleepBounded(250, ctx.deadline);
+    }
+  };
 
-  // 1) One mention -> one wake -> exactly one admitted turn.
+  // 1) One mention -> one wake -> exactly ONE terminal execution outcome.
+  // F-EXEC13-E01: raw message delta is INFORMATIONAL ONLY — a real turn
+  // legitimately emits multiple messages (assistant text + tool calls +
+  // follow-ups). PASS = exactly one succeeded/failed outcome per admitted wake.
   const key1 = `live-cd-${Date.now()}-1`;
-  const before = await messageCount(coderOne.sessionId as string);
+  const before = await messageCount(sessionId);
+  const terminalMark = terminalOutcomes.length;
   const post1 = publishPost(ctx.store, {
     swarmId,
     authorMemberId: null,
@@ -1657,17 +1873,28 @@ async function runWakeProofs(
   const wakeId = post1.wakeIds[0] as string;
   const res = (await dispatcher.dispatchWake(swarmId, wakeId, { correlationId: key1 })) as { status: string };
   note("dispatch admits one queue-only turn", res.status === "dispatched", `status=${res.status} turns=${ctx.turnsUsed}`);
-  // Wait for the terminal event (bounded by the global deadline), then reconcile.
-  const rec = (await inner.wait(coderOne.sessionId as string, ctx.deadline)) as {
+  // Wait for the terminal event (bounded by the global deadline), then reconcile
+  // terminal OUTCOMES — message delta is informational only (F-EXEC13-E01).
+  const rec = (await inner.wait(sessionId, ctx.deadline)) as {
     outcome: string;
     externalId: string;
   };
-  const after = await messageCount(coderOne.sessionId as string);
-  note("exactly-one-turn executed", after - before === 1, `messages delta=${after - before} outcome=${rec.outcome}`);
+  // DEBUG-SSE-01 + F-EXEC19-E01: loud zero-wire gate — wait() reconciles
+  // via polling, so it can resolve with zero mapped frames. That trips
+  // SSE_ZERO_FRAMES only when the wire was fully silent (frames==0 AND
+  // drops==0); an idle-but-live stream (frames==0, drops>0 from correctly
+  // filtered keepalives/`server.connected`) passes. Diagnosed abort
+  // (exit 3), never a silent 0-event proof.
+  const blackout = sseBlackoutDetail(sse.framesObserved, sse.framesDropped, sse.subsRejected);
+  if (blackout !== null) fail(ctx, "SSE_ZERO_FRAMES", blackout);
+  const after = await messageCount(sessionId);
+  const terminalDelta = await awaitTerminalDelta(terminalMark, 10000);
+  note("exactly-one-terminal-outcome executed", terminalDelta === 1, `terminal-outcomes=${terminalDelta} messages-delta=${after - before} (informational) outcome=${rec.outcome}`);
   note("identity preserved (wake<->turn)", rec.externalId === wakeId, `externalId match=${rec.externalId === wakeId}`);
 
-  // 2) Duplicate (same idempotencyKey) -> no extra turn.
+  // 2) Duplicate (same idempotencyKey) -> no extra turn, zero new terminals.
   const turnsBeforeDupe = ctx.turnsUsed;
+  const dupeMark = terminalOutcomes.length;
   const dupe = publishPost(ctx.store, {
     swarmId,
     authorMemberId: null,
@@ -1676,10 +1903,13 @@ async function runWakeProofs(
     idempotencyKey: key1,
   });
   note("duplicate post deduped, no new wake", dupe.deduped === true && dupe.wakeIds.length === 0, `deduped=${dupe.deduped} wakeIds=${dupe.wakeIds.length}`);
-  note("duplicate causes zero inference", ctx.turnsUsed === turnsBeforeDupe, `turns delta=${ctx.turnsUsed - turnsBeforeDupe}`);
+  await sleepBounded(2000, ctx.deadline); // beat for any stray execution (bounded)
+  const dupeTerminals = countTerminalOutcomesSince(terminalOutcomes, sessionId, dupeMark);
+  note("duplicate causes zero terminal outcomes", dupeTerminals === 0 && ctx.turnsUsed === turnsBeforeDupe, `terminal-outcomes=${dupeTerminals} turns delta=${ctx.turnsUsed - turnsBeforeDupe}`);
 
-  // 3) Unrelated (mention-free) post -> no wake.
+  // 3) Unrelated (mention-free) post -> no wake, zero new terminals.
   const wakesBefore = countMemberWakes(ctx.store, swarmId, coderOne.id);
+  const unrelatedMark = terminalOutcomes.length;
   const plain = publishPost(ctx.store, {
     swarmId,
     authorMemberId: null,
@@ -1687,11 +1917,13 @@ async function runWakeProofs(
     body: "General note with no mentions; nothing to do.",
     idempotencyKey: `live-cd-${Date.now()}-plain`,
   });
+  await sleepBounded(2000, ctx.deadline); // beat for any stray execution (bounded)
   const wakesAfter = countMemberWakes(ctx.store, swarmId, coderOne.id);
+  const unrelatedTerminals = countTerminalOutcomesSince(terminalOutcomes, sessionId, unrelatedMark);
   note(
     "unrelated post wakes nobody",
-    plain.wakeIds.length === 0 && wakesAfter.count === wakesBefore.count,
-    `wakeIds=${plain.wakeIds.length} store-delta=${wakesAfter.count - wakesBefore.count} via=${wakesAfter.via}`,
+    plain.wakeIds.length === 0 && wakesAfter.count === wakesBefore.count && unrelatedTerminals === 0,
+    `wakeIds=${plain.wakeIds.length} store-delta=${wakesAfter.count - wakesBefore.count} via=${wakesAfter.via} terminal-outcomes=${unrelatedTerminals}`,
   );
 
   // 4) Lead waiting performs zero inference: observe a quiet window, bounded
@@ -1729,6 +1961,7 @@ async function runOverlap(
   note: (check: string, pass: boolean, detail: string) => void,
   startedAt: Map<string, string>,
   terminalAt: Map<string, string>,
+  sse: { readonly framesObserved: number; readonly framesDropped: number; readonly subsRejected: number },
 ): Promise<void> {
   const boundedTask =
     `Bounded local check (target ~${ctx.opts.workSeconds}s, NO network, disposable dir only): ` +
@@ -1752,6 +1985,10 @@ async function runOverlap(
     inner.wait(workerA, ctx.deadline),
     inner.wait(workerB, ctx.deadline),
   ])) as Array<{ outcome: string; observedAt: string }>;
+  // DEBUG-SSE-01 + F-EXEC19-E01: loud zero-wire gate (same rule as the
+  // wake path: trip only on frames==0 AND drops==0).
+  const overlapBlackout = sseBlackoutDetail(sse.framesObserved, sse.framesDropped, sse.subsRejected);
+  if (overlapBlackout !== null) fail(ctx, "SSE_ZERO_FRAMES", overlapBlackout);
   const aStart = startedAt.get(workerA) ?? submittedA;
   const bStart = startedAt.get(workerB) ?? submittedB;
   const aEnd = terminalAt.get(workerA) ?? recA.observedAt;

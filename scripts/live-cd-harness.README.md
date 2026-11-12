@@ -22,6 +22,8 @@ bun scripts/live-cd-harness.ts --self-test unsafe    # exit 3, synthetic unsafe-
 bun scripts/live-cd-harness.ts --self-test ceiling   # exit 3, synthetic ceiling-breach abort (zero inference)
 bun scripts/live-cd-harness.ts --self-test abort     # exit 0, abort-propagation second-gate proof (zero inference)
 bun scripts/live-cd-harness.ts --self-test cost-shape # exit 0, deep-cost + ledger-order proof (zero inference)
+bun scripts/live-cd-harness.ts --self-test terminal   # exit 0, exactly-one-terminal-outcome proof rows (zero inference)
+bun scripts/live-cd-harness.ts --self-test sse        # exit 0, SSE zero-wire loud-gate proof rows (true blackout trips; idle-with-drops stays quiet)
 ```
 
 `--dry-run` performs **zero inference**: no server contact, no sqlite open,
@@ -38,14 +40,15 @@ exec/network/env/unknown-tool gap payloads that echo the disposable root)
 or synthetic usage costs through the real extractor + gate (ceiling) and
 exits **3** when the guard fires, proving the abort path without a server.
 
-`--self-test abort|cost-shape` are zero-inference assertion proofs (exit
+`--self-test abort|cost-shape|terminal` are zero-inference assertion proofs (exit
 **0** on PASS, **1** on FAIL): `abort` records a synthetic SSE abort, drops
 the throw (simulating a swallowed dispatch-loop throw), and proves the
 `checkAborted` second gate refuses the next submit *and* the shared
 subscription cancel fired; `cost-shape` proves deep-nesting cost extraction,
 unknown-shape 0-with-warning, string-`"499"` abort classification, and the
-ledger close-after-final-log order. The same three assertions also run as
-`--dry-run` self-checks.
+ledger close-after-final-log order; terminal proves exactly-one-terminal-outcome
+counting (5 msgs / 1 terminal PASS, 2 terminals FAIL, duplicate wake 0).
+The same assertions also run as dry-run self-checks.
 
 ## Live run (resumption — NOT executed in HARNESS-01)
 
@@ -68,9 +71,12 @@ ledger close-after-final-log order. The same three assertions also run as
 
 ### What live mode proves
 
-- **wake**: 1 mention → 1 wake → exactly one queue-only turn
-  (`message.list` delta 1); duplicate `idempotencyKey` → `deduped:true`,
-  zero new wakes, zero new turns; mention-free post → no wakes;
+- **wake**: 1 mention → 1 wake → exactly one terminal execution outcome
+  (`session.execution.succeeded/failed` count == 1 per admitted wake; raw
+  `message.list` delta is informational only — a real turn emits multiple
+  messages); duplicate `idempotencyKey` → `deduped:true`,
+  zero new wakes, zero new turns, zero new terminal outcomes; mention-free post → no wakes,
+  zero new wakes and zero new terminal outcomes;
   session/agent identity preserved end to end; lead quiet window shows
   `submitTurn` delta 0 (zero inference while waiting); worker
   `execution.succeeded` → lead wake admitted → lead back to `waiting`.
@@ -163,7 +169,8 @@ never an API argument.
   included; repeat flags resolve first-wins) · `3`
   budget/quota/auth/unsafe/timeout/499/WAIT_ABORTED abort (safe to rerun; tmp
   state only). A `--spawn`ed disposable server is killed in the `finally`
-  block.
+  block, with a `taskkill /F /T` force-kill fallback when `kill()` leaves it
+  alive (logged as `force-kill fallback attempted`).
 
 ## Redaction + containment notes
 
