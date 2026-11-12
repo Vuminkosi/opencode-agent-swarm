@@ -62,6 +62,14 @@ const VERSIONED_ERRORS = {
     required: ["method", "fallback"],
     additionalProperties: false,
   },
+  invalid_caller: {
+    type: "object",
+    properties: {
+      method: { type: "string" },
+    },
+    required: ["method"],
+    additionalProperties: false,
+  },
   invalid_swarm_id: {
     type: "object",
     properties: {
@@ -163,9 +171,13 @@ export const SwarmRpc = Rpc.define({
 export type SwarmRpc = typeof SwarmRpc;
 
 /** Structural daemon reader injected by the transport lane (M6-01).
- * SEC-M6-02: the injected reader MUST be caller-scoped (membership-enforcing);
- * handlers treat an unwired reader as fail-closed `daemon_unwired` and never
- * serve ambient reads. Every served read is allowlisted by swarmId above. */
+ * SEC-M6-02/SEC-F01: the injected reader MUST be caller-scoped
+ * (membership-enforcing), and `createSwarmRpcHandlers` MUST be given the
+ * lane-authenticated caller that scope was issued for. Handlers fail closed
+ * with `invalid_caller` (reader never touched) when a reader is wired
+ * without an authorized caller; an unwired reader stays fail-closed
+ * `daemon_unwired` and never serves ambient reads. Every served read is
+ * allowlisted by swarmId above. */
 export interface SwarmRpcReader {
   snapshot(swarmId: string): Promise<{
     readonly swarm: { readonly id: string; readonly title: string; readonly status: string };
@@ -182,6 +194,59 @@ export interface SwarmRpcReader {
     after?: number,
     limit?: number,
   ): Promise<{ readonly posts: readonly unknown[]; readonly after: number }>;
+}
+
+/**
+ * SEC-F01: authorized RPC caller bound server-side by the transport lane
+ * (M6-01) at handler creation, alongside the caller-scoped reader.
+ * Reuses the established daemon auth model — loopback bind + Bearer token
+ * (`packages/runtime/src/app.ts` `checkAuth`/`checkOrigin`,
+ * `config.ts isLoopbackHost`) and the plugin `SwarmDaemonClient` Bearer
+ * convention (`./client.ts`: Bearer on every versioned route, none on
+ * `/healthz`) — no new auth system: no new token format, no new crypto,
+ * no credential handling here. The binding is set by server-side lane code;
+ * RPC callers have no channel to claim it (the host call context is
+ * `{ signal, error }` only — see `promise/rpc.d.ts`), so it cannot be
+ * spoofed per call. `health` stays unauthenticated liveness (mirrors
+ * unauthenticated `/healthz`); daemon-backed reads require a binding.
+ */
+export type SwarmRpcCaller =
+  | { readonly kind: "plugin-host" }
+  | { readonly kind: "daemon-bearer"; readonly bearer: string; readonly baseUrl: string };
+
+/** Local mirror of runtime `isLoopbackHost` (config.ts); kept local so this portable module stays dependency-free. */
+function isLoopbackRpcHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase().replace(/^\[(.*)\]$/, "$1");
+  if (normalized === "localhost" || normalized === "::1") return true;
+  if (normalized.startsWith("127.")) {
+    const parts = normalized.split(".");
+    if (parts.length === 4 && parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255)) return true;
+  }
+  return false;
+}
+
+function isLoopbackRpcBaseUrl(baseUrl: string): boolean {
+  try {
+    return isLoopbackRpcHost(new URL(baseUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Authorized path: the in-process plugin-host channel, or a loopback daemon
+ * bearer (non-empty token + loopback base URL, mirroring the daemon's
+ * bearer+loopback gate). Everything else — missing binding, unknown kind,
+ * empty bearer, non-loopback or unparseable URL — is unscoped. Fail-closed
+ * by construction: defaults to false.
+ */
+export function isAuthorizedRpcCaller(caller: SwarmRpcCaller | undefined): boolean {
+  if (caller === undefined) return false;
+  if (caller.kind === "plugin-host") return true;
+  if (caller.kind === "daemon-bearer") {
+    return caller.bearer.length > 0 && isLoopbackRpcBaseUrl(caller.baseUrl);
+  }
+  return false;
 }
 
 /**
@@ -231,6 +296,14 @@ function daemonUnwiredError(context: SwarmRpcHandlerContext, method: SwarmRpcMet
  */
 const SWARM_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
+function invalidCallerError(context: SwarmRpcHandlerContext, method: SwarmRpcMethodName): unknown {
+  return context.error(
+    "invalid_caller",
+    `Rejecting ${method}: no authorized RPC caller is bound for daemon-backed reads (plugin-host or loopback daemon bearer required)`,
+    undefined,
+  );
+}
+
 function invalidSwarmIdError(context: SwarmRpcHandlerContext, received: unknown): unknown {
   return context.error(
     "invalid_swarm_id",
@@ -273,9 +346,15 @@ function normalizePagination(
 /**
  * Versioned RPC handlers. Every method first validates `schemaVersion`
  * (fail-closed `stale_schema`), then serves zero-inference reads; daemon
- * methods fail closed with `daemon_unwired` until a reader is injected.
+ * methods fail closed with `daemon_unwired` until a reader is injected,
+ * and with `invalid_caller` when a reader is wired without the
+ * lane-authenticated caller binding (reader never touched on rejection).
+ * `health` is unauthenticated liveness (mirrors `/healthz`).
  */
-export function createSwarmRpcHandlers(reader?: SwarmRpcReader | undefined): {
+export function createSwarmRpcHandlers(
+  reader?: SwarmRpcReader | undefined,
+  caller?: SwarmRpcCaller | undefined,
+): {
   readonly health: (input: unknown, context: SwarmRpcHandlerContext) => Promise<unknown>;
   readonly boardSnapshot: (input: unknown, context: SwarmRpcHandlerContext) => Promise<unknown>;
   readonly boardPosts: (input: unknown, context: SwarmRpcHandlerContext) => Promise<unknown>;
@@ -296,6 +375,9 @@ export function createSwarmRpcHandlers(reader?: SwarmRpcReader | undefined): {
       }
       if (reader === undefined) {
         return daemonUnwiredError(context, "boardSnapshot");
+      }
+      if (!isAuthorizedRpcCaller(caller)) {
+        return invalidCallerError(context, "boardSnapshot");
       }
       const snapshot = await reader.snapshot(params["swarmId"]);
       return {
@@ -320,6 +402,9 @@ export function createSwarmRpcHandlers(reader?: SwarmRpcReader | undefined): {
       const pagination = normalizePagination(context, params["after"], params["limit"]);
       if ("error" in pagination) {
         return pagination.error;
+      }
+      if (!isAuthorizedRpcCaller(caller)) {
+        return invalidCallerError(context, "boardPosts");
       }
       const page = await reader.listPosts(params["swarmId"], pagination.after, pagination.limit);
       return {

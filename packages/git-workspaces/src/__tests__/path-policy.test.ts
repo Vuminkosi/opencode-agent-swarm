@@ -10,6 +10,7 @@ import {
   findOwnedPathConflict,
   grantsOverlap,
   isWithinRoot,
+  isWindowsDeviceSegment,
   normalizeForCompare,
   normalizeGrant,
   physicalFormForNewPath,
@@ -347,5 +348,127 @@ describe("grant namespace unification (SEC-F-01)", () => {
   test("genuinely disjoint absolute does not conflict", () => {
     const live = new Map<string, readonly string[]>([["t-01", ["packages/foo"]]]);
     expect(findOwnedPathConflict(live, "t-02", ["C:\\wt\\task-t2\\packages\\other"])).toBeNull();
+  });
+});
+
+describe("M8 COMPAT F-01 — long-prefix and device-namespace paths", () => {
+  test("\\\\?\\-prefixed drive spelling compares equal to the plain spelling", () => {
+    expect(normalizeForCompare("\\\\?\\C:\\root\\sub")).toBe(normalizeForCompare("C:\\root\\sub"));
+    expect(normalizeForCompare("//?/C:/root/sub")).toBe(normalizeForCompare("C:\\root\\sub"));
+    expect(rootKey("\\\\?\\C:\\Work\\Root")).toBe(rootKey("c:\\work\\root\\"));
+  });
+
+  test("\\\\?\\UNC\\ spelling compares equal to the plain UNC spelling", () => {
+    expect(normalizeForCompare("\\\\?\\UNC\\srv\\share\\dir")).toBe(normalizeForCompare("\\\\srv\\share\\dir"));
+  });
+
+  test("\\\\.\\ drive spelling compares equal to the plain spelling", () => {
+    expect(normalizeForCompare("\\\\.\\C:\\root\\sub")).toBe(normalizeForCompare("C:\\root\\sub"));
+  });
+
+  test("prefixed absolute candidate inside the root resolves", () => {
+    expect(resolveWithinRoot("C:\\root", "\\\\?\\C:\\root\\sub")).toBe(normalizeForCompare("C:\\root\\sub"));
+    expect(resolveWithinRoot("C:\\root", "\\\\.\\C:\\root\\sub")).toBe(normalizeForCompare("C:\\root\\sub"));
+  });
+
+  test("prefixed spelling of an outside path still escapes (fail-closed)", () => {
+    expect(() => resolveWithinRoot("C:\\root", "\\\\?\\C:\\other\\x")).toThrow();
+    expect(() => resolveWithinRoot("C:\\root", "\\\\.\\D:\\root\\sub")).toThrow();
+  });
+
+  test("prefix cannot bypass canonical-root denial (same code as plain)", () => {
+    const ctx = {
+      canonicalRoot: "C:\\repo",
+      worktreePath: "C:\\wt\\task-t1",
+      ownedPaths: ["packages/foo"],
+      forbiddenPaths: [] as string[],
+    };
+    for (const cand of ["C:\\repo\\x.ts", "\\\\?\\C:\\repo\\x.ts", "\\\\.\\C:\\repo\\x.ts"]) {
+      const v = validateWorktreeWrite(ctx, cand);
+      expect(v.allowed).toBe(false);
+      if (!v.allowed) expect(v.code).toBe("CANONICAL_CHECKOUT");
+    }
+  });
+
+  test("mixed root spellings still confine (prefixed worktree root)", () => {
+    const ctx = {
+      canonicalRoot: "\\\\?\\C:\\repo",
+      worktreePath: "C:\\wt\\task-t1",
+      ownedPaths: ["packages/foo"],
+      forbiddenPaths: [] as string[],
+    };
+    const v = validateWorktreeWrite(ctx, "C:\\repo\\x.ts");
+    expect(v.allowed).toBe(false);
+    if (!v.allowed) expect(v.code).toBe("CANONICAL_CHECKOUT");
+    const ok = validateWorktreeWrite(ctx, "\\\\?\\C:\\wt\\task-t1\\packages\\foo\\a.ts");
+    expect(ok.allowed).toBe(true);
+  });
+
+  test("unmappable namespaces fail closed (INVALID_PATH, never allow)", () => {
+    for (const bad of [
+      "\\\\?\\Volume{b75e2c83-0000-0000-0000-602f00000000}\\x",
+      "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume1\\x",
+      "\\\\.\\COM1",
+      "\\\\.\\PhysicalDrive0",
+      "\\Device\\HarddiskVolume1\\root\\sub",
+      "\\??\\C:\\root\\sub",
+    ]) {
+      expect(() => normalizeForCompare(bad)).toThrow();
+    }
+    const ctx = {
+      canonicalRoot: "C:\\repo",
+      worktreePath: "C:\\wt\\task-t1",
+      ownedPaths: ["packages/foo"],
+      forbiddenPaths: [] as string[],
+    };
+    for (const bad of ["\\\\.\\COM1", "\\Device\\HarddiskVolume1\\x", "\\\\?\\Volume{abc}\\x"]) {
+      const v = validateWorktreeWrite(ctx, bad);
+      expect(v.allowed).toBe(false);
+    }
+  });
+});
+
+describe("M8 COMPAT F-02 — device names and NUL bytes", () => {
+  test("isWindowsDeviceSegment: reserved names any case, with extensions/trailing dots-spaces", () => {
+    for (const seg of ["CON", "con", "Prn", "AUX", "nul", "NUL.txt", "con.txt", "COM1", "com9", "LPT1", "lpt9.log", "aux.", "CON "]) {
+      expect(isWindowsDeviceSegment(seg)).toBe(true);
+    }
+    for (const seg of ["console", "contest.txt", "com10", "lpt0", "aux1", "mine", "null", "a.ts", "C:"]) {
+      expect(isWindowsDeviceSegment(seg)).toBe(false);
+    }
+  });
+
+  test("device name in any component rejected (fail-closed)", () => {
+    for (const bad of [
+      "C:\\root\\CON",
+      "C:\\root\\con.txt",
+      "C:\\root\\sub\\PRN",
+      "C:\\root\\COM1",
+      "C:\\wt\\lpt9.log\\x",
+      "C:\\root\\AUX\\deep\\a.ts",
+      "C:\\NUL",
+    ]) {
+      expect(() => normalizeForCompare(bad)).toThrow();
+    }
+    // Lowercase + extension variants compare-reject too.
+    expect(() => resolveWithinRoot("C:\\root", "C:\\root\\nul")).toThrow();
+    expect(() => rootKey("C:\\root\\com5")).toThrow();
+  });
+
+  test("embedded NUL rejected in every entry point (fail-closed)", () => {
+    expect(() => normalizeForCompare("C:\\root\\a\0b")).toThrow();
+    expect(() => normalizeForCompare("C:\\root\\\0")).toThrow();
+    expect(() => resolveWithinRoot("C:\\root", "sub\0dir")).toThrow();
+    const ctx = {
+      canonicalRoot: "C:\\repo",
+      worktreePath: "C:\\wt\\task-t1",
+      ownedPaths: ["packages/foo"],
+      forbiddenPaths: [] as string[],
+    };
+    for (const bad of ["packages/foo/a\0b.ts", "C:\\wt\\task-t1\\packages\\foo\\\0", "packages/foo/CON", "C:\\wt\\task-t1\\docs\\NUL.txt"]) {
+      const v = validateWorktreeWrite(ctx, bad);
+      expect(v.allowed).toBe(false);
+      if (!v.allowed) expect(v.code).toBe("INVALID_PATH");
+    }
   });
 });

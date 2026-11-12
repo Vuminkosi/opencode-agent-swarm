@@ -197,12 +197,24 @@ fakeA.on("PATCH", "/api/session/ses_fake_A", {});
 await mgr.applyPermissionRules("ses_fake_A", [{ scope: `${DISPOSABLE_ROOT}\\*`, action: "deny" }]);
 const patchBodies = fakeA.bodiesFor("PATCH", "/api/session/ses_fake_A");
 check(
-  "applyPermissionRules maps scope to native resource + deny effect",
+  "applyPermissionRules maps scope to native resource + deny effect (explicit edit/write actions, no wildcard)",
   JSON.stringify((patchBodies[0] as { permissions: unknown }).permissions) ===
-    JSON.stringify([{ action: "*", resource: `${DISPOSABLE_ROOT}\\*`, effect: "deny" }]),
+    JSON.stringify([
+      { action: "edit", resource: `${DISPOSABLE_ROOT}\\*`, effect: "deny" },
+      { action: "write", resource: `${DISPOSABLE_ROOT}\\*`, effect: "deny" },
+    ]),
 );
 const mapped = mapPermissionRule({ scope: "C:\\scratch\\*", action: "allow" });
-check("permission map keeps allow effect", mapped.effect === "allow" && mapped.resource === "C:\\scratch\\*");
+check(
+  "permission map expands to explicit edit/write entries keeping allow effect",
+  mapped.length === 2 &&
+    mapped.every((entry) => entry.effect === "allow" && entry.resource === "C:\\scratch\\*") &&
+    mapped.map((entry) => entry.action).join(",") === "edit,write",
+);
+check(
+  "permission map emits no wildcard action",
+  !(mapped.map((entry) => entry.action as string) as string[]).includes("*"),
+);
 expectThrow("empty permission scope rejected", () => mapPermissionRule({ scope: "  ", action: "deny" }), "EMPTY_PERMISSION_SCOPE");
 
 // ---------- Tier A: snapshot / interrupt / wait reconciliation ----------

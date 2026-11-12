@@ -25,6 +25,8 @@
 
 import { ProtocolError } from "@opencode-swarm/protocol";
 import type { Member, WakeIntent, WakeReason } from "@opencode-swarm/protocol";
+import type { LedgerOutcome } from "./usage-ledger.js";
+import type { UsageLedger } from "./usage-ledger.js";
 import {
   WAKE_BACKOFF_BASE_MS_DEFAULT,
   WAKE_BACKOFF_CAP_MS_DEFAULT,
@@ -191,6 +193,7 @@ export class WakeDispatcher {
     private readonly harness: DispatchHarness,
     private readonly events?: WakeEventEmitter,
     policy?: DispatchPolicy,
+    private readonly ledger?: Pick<UsageLedger, "record">,
   ) {
     this.leaseTtlMs = policy?.leaseTtlMs ?? WAKE_LEASE_TTL_MS_DEFAULT;
     this.backoffBaseMs = policy?.backoffBaseMs ?? WAKE_BACKOFF_BASE_MS_DEFAULT;
@@ -203,6 +206,44 @@ export class WakeDispatcher {
   /** Queue-only dispatches performed (status/eligibility reads never move this). */
   getDispatchCount(): number {
     return this.dispatchedTurns;
+  }
+
+  /**
+   * M8-FIX-COMPAT-01 (F-M8R-01): best-effort usage telemetry on terminal
+   * dispatch outcomes. Records refs + counts + outcome only — provider/
+   * model refs, member/wake/task ids, attempt count, zero token counts,
+   * costMicro 0 (unobserved, never estimated), dispatcher correlation id.
+   * Never throws into dispatch, never blocks turns, never carries payload
+   * text, prompts, or credentials (no-model-channel invariant).
+   */
+  private recordTerminalLedger(input: {
+    readonly outcome: LedgerOutcome;
+    readonly swarmId: string;
+    readonly wakeId: string;
+    readonly member: Member;
+    readonly taskId: string | null;
+    readonly attempts: number;
+    readonly correlationId: string;
+  }): void {
+    if (this.ledger === undefined) return;
+    try {
+      this.ledger.record({
+        swarmId: input.swarmId,
+        memberId: input.member.id,
+        wakeId: input.wakeId,
+        ...(input.taskId === null ? {} : { taskId: input.taskId }),
+        providerId: input.member.model.providerID,
+        modelId: input.member.model.id,
+        attempt: input.attempts,
+        inputTokens: 0,
+        outputTokens: 0,
+        costMicro: 0,
+        outcome: input.outcome,
+        correlationId: input.correlationId,
+      });
+    } catch {
+      // Best-effort telemetry only — dispatch semantics never change.
+    }
   }
 
   private log(event: Parameters<NonNullable<WakeDispatcher["events"]>["emit"]>[0]): void {
@@ -347,6 +388,10 @@ export class WakeDispatcher {
           detail: { memberTransition: blocked.memberTransition },
         });
         const after = this.store.getWake(wakeId);
+        this.recordTerminalLedger({
+          outcome: "quota-paused", swarmId, wakeId, member, taskId: claim.intent.taskId,
+          attempts: after.attempts, correlationId,
+        });
         return { ...base, memberId: member.id, attempts: after.attempts, status: "quota-blocked" };
       }
       if (isTransientError(err)) {
@@ -363,6 +408,12 @@ export class WakeDispatcher {
           kind: "retry_scheduled", swarmId, wakeId, memberId: member.id, correlationId,
           detail: { attempts: String(retry.attempts), notBefore: retry.notBefore },
         });
+        if (retry.exhausted) {
+          this.recordTerminalLedger({
+            outcome: "failed-permanent", swarmId, wakeId, member, taskId: claim.intent.taskId,
+            attempts: retry.attempts, correlationId,
+          });
+        }
         return {
           ...base, memberId: member.id, attempts: retry.attempts,
           status: retry.exhausted ? "failed-permanent" : "failed-transient-scheduled",
@@ -371,6 +422,10 @@ export class WakeDispatcher {
       }
       const failed = this.store.completeWake(wakeId, "failed", claim.fencingToken, correlationId);
       this.log({ kind: "completed", swarmId, wakeId, memberId: member.id, correlationId, detail: { outcome: "failed" } });
+      this.recordTerminalLedger({
+        outcome: "failed-permanent", swarmId, wakeId, member, taskId: claim.intent.taskId,
+        attempts: failed.attempts, correlationId,
+      });
       return { ...base, memberId: member.id, attempts: failed.attempts, status: "failed-permanent", detail: "permanent-transport" };
     }
     // Admission receipt != execution proof (crash window): record the ack
@@ -380,6 +435,10 @@ export class WakeDispatcher {
     this.log({
       kind: "dispatched", swarmId, wakeId, memberId: member.id, correlationId,
       detail: { fencingToken: String(claim.fencingToken) },
+    });
+    this.recordTerminalLedger({
+      outcome: "dispatched", swarmId, wakeId, member, taskId: claim.intent.taskId,
+      attempts: acked.attempts, correlationId,
     });
     return {
       ...base, memberId: member.id, attempts: acked.attempts,
@@ -502,6 +561,10 @@ export class WakeDispatcher {
         const blocked = this.store.markQuotaBlocked(member.id, wakeId, correlationId);
         void blocked;
         const after = this.store.getWake(wakeId);
+        this.recordTerminalLedger({
+          outcome: "quota-paused", swarmId, wakeId, member, taskId: claim.intent.taskId,
+          attempts: after.attempts, correlationId,
+        });
         return { ...base, memberId: member.id, attempts: after.attempts, status: "quota-blocked" };
       }
       if (isTransientError(err)) {
@@ -514,6 +577,12 @@ export class WakeDispatcher {
           rand: this.randomFn,
           nowIso: this.nowFn(),
         });
+        if (retry.exhausted) {
+          this.recordTerminalLedger({
+            outcome: "failed-permanent", swarmId, wakeId, member, taskId: claim.intent.taskId,
+            attempts: retry.attempts, correlationId,
+          });
+        }
         return {
           ...base, memberId: member.id, attempts: retry.attempts,
           status: retry.exhausted ? "failed-permanent" : "failed-transient-scheduled",
@@ -521,6 +590,10 @@ export class WakeDispatcher {
         };
       }
       const failed = this.store.completeWake(wakeId, "failed", claim.fencingToken, correlationId);
+      this.recordTerminalLedger({
+        outcome: "failed-permanent", swarmId, wakeId, member, taskId: claim.intent.taskId,
+        attempts: failed.attempts, correlationId,
+      });
       return { ...base, memberId: member.id, attempts: failed.attempts, status: "failed-permanent", detail: "permanent-transport" };
     }
     const acked = this.store.ackWakeObservedRunning(wakeId, claim.fencingToken);
@@ -528,6 +601,10 @@ export class WakeDispatcher {
     this.log({
       kind: "dispatched", swarmId, wakeId, memberId: member.id, correlationId,
       detail: { fencingToken: String(claim.fencingToken), retry: "admitted-retry" },
+    });
+    this.recordTerminalLedger({
+      outcome: "dispatched", swarmId, wakeId, member, taskId: claim.intent.taskId,
+      attempts: acked.attempts, correlationId,
     });
     return {
       ...base, memberId: member.id, attempts: acked.attempts,

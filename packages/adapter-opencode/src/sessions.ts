@@ -304,18 +304,34 @@ export function buildPromptBody(request: SubmitTurnRequest, admittedAt: string):
 }
 
 /**
- * Map a port-level permission rule to the verified native Ruleset entry.
- * `scope` → native `resource`. The native `action` slot has no port-level
- * counterpart (C-HARNESS-01 is frozen); `"*"` is a documented daemon-policy
- * assumption — last-match-wins + child-inheritance semantics MUST be
- * confirmed live by probe 11 before relying on enforcement. Recorded here as
- * an explicit gap, not a verified semantic. [OC2-REST: Permission.Rule]
+ * Minimal explicit native actions the harness ever restricts. Derived from
+ * the sole production call site (`COORDINATOR_WRITE_DENY_RULES` in the
+ * runtime activation service: the coordinator session is denied `edit` +
+ * `write`); the previous `"*"` wildcard is removed. Never broaden without
+ * a probe-11 contract amendment. [OC2-REST: Permission.Rule]
  */
-export function mapPermissionRule(rule: PermissionRule): { readonly action: string; readonly resource: string; readonly effect: "allow" | "deny" } {
+export const HARNESS_PERMISSION_ACTIONS = ["edit", "write"] as const;
+export type HarnessPermissionAction = (typeof HARNESS_PERMISSION_ACTIONS)[number];
+
+/** Native Ruleset entry with the wildcard replaced by the explicit action list above. */
+export interface NativePermissionEntry {
+  readonly action: HarnessPermissionAction;
+  readonly resource: string;
+  readonly effect: "allow" | "deny";
+}
+
+/**
+ * Map a port-level permission rule to the verified native Ruleset entries.
+ * `scope` → native `resource`. One port rule expands to one native entry
+ * per explicit action in `HARNESS_PERMISSION_ACTIONS` — no `"*"` is ever
+ * emitted. The native `action` slot has no port-level counterpart
+ * (contract C-HARNESS-01 is frozen), so the list stays fixed here.
+ */
+export function mapPermissionRule(rule: PermissionRule): readonly NativePermissionEntry[] {
   if (rule.scope.trim() === "") {
     throw new OpenCodeApiError(400, "EMPTY_PERMISSION_SCOPE");
   }
-  return { action: "*", resource: rule.scope, effect: rule.action };
+  return HARNESS_PERMISSION_ACTIONS.map((action) => ({ action, resource: rule.scope, effect: rule.action }));
 }
 
 /**
@@ -396,11 +412,12 @@ export class SessionManager {
 
   /**
    * PATCH /api/session/{id} {permissions} — verified live-update endpoint.
-   * See `mapPermissionRule` for the marked action-slot assumption.
+   * Each port rule expands to the explicit per-action entries from
+   * `mapPermissionRule`; no wildcard action is ever emitted.
    */
   async applyPermissionRules(sessionId: string, rules: readonly PermissionRule[]): Promise<void> {
     await this.transport.request<unknown>("PATCH", `/api/session/${encodeURIComponent(sessionId)}`, {
-      permissions: rules.map(mapPermissionRule),
+      permissions: rules.flatMap(mapPermissionRule),
     });
   }
 

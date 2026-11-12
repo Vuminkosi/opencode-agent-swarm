@@ -65,6 +65,9 @@ import { ProtocolError } from "@opencode-swarm/protocol";
 const MIGRATIONS: readonly { version: number; file: string }[] = [
   { version: 1, file: "001_initial.sql" },
   { version: 2, file: "002_wake_dedupe_key.sql" },
+  // F-C: inbox_dedupe per-swarm scoping (004). Independent of any future
+  // version 3 (no cross-migration dependency); applied when missing.
+  { version: 4, file: "004_inbox_dedupe_swarm_scope.sql" },
 ];
 
 const MAX_TXN_BEGIN_ATTEMPTS = 50;
@@ -248,6 +251,12 @@ function parseJsonArray(raw: string, what: string): string[] {
  * store gate — no duplicated business rules).
  */
 export const WAKE_LEASE_TTL_MS_DEFAULT = 60_000 as const;
+/**
+ * F-B review-after age for quarantine markers. Expiry never auto-admits:
+ * an expired marker keeps the wake blocked from dispatch and surfaces it
+ * via `listWakesNeedingQuarantineReview` / `isWakeQuarantineReviewDue`
+ * until an operator clears or cancels it.
+ */
 export const WAKE_QUARANTINE_TTL_MS: number = 24 * 3600 * 1000;
 export const WAKE_BACKOFF_BASE_MS_DEFAULT = 250 as const;
 export const WAKE_BACKOFF_CAP_MS_DEFAULT = 10_000 as const;
@@ -308,6 +317,21 @@ export type WakeDispatchClaim =
   | { readonly status: "deferred-ineligible"; readonly intent: WakeIntent }
   | { readonly status: "deferred-backoff"; readonly intent: WakeIntent }
   | { readonly status: "deferred-quarantined"; readonly intent: WakeIntent };
+
+/**
+ * F-B operator re-review queue entry (M8): one quarantined wake and the
+ * age of its marker. `reviewDue` is true once the marker TTL has elapsed;
+ * expiry never auto-admits — the entry waits for operator review.
+ */
+export interface QuarantineReviewItem {
+  readonly wakeId: string;
+  readonly swarmId: string;
+  readonly memberId: string;
+  readonly wakeState: WakeState;
+  readonly quarantineExpiresAt: string;
+  readonly reviewDue: boolean;
+  readonly quarantinedForMs: number;
+}
 
 export class SwarmStore {
   private readonly db: Database;
@@ -1326,10 +1350,15 @@ export class SwarmStore {
   // neither does — the persistent lifecycle trail).
   //
   // Fencing: `leases` row `member-turn:{memberId}` = {holder: wakeId,
-  // fencing_token: monotonic, expires_at}. Exactly one holder per member;
-  // ack/complete validate the token when supplied. Quarantine markers use
-  // `wake-quarantine:{wakeId}` rows (holder "quarantine", 24h TTL) so an
-  // ambiguous wake can never be auto-redispatched (never blind replay).
+  // fencing_token: monotonic via the `lease_fencing_high_water` table (F-A:
+  // strictly increasing across release/re-acquire cycles and restarts),
+  // expires_at}. Exactly one holder per member; ack/complete validate the
+  // token when supplied. Quarantine markers use `wake-quarantine:{wakeId}`
+  // rows (holder "quarantine", 24h review-after TTL) so an ambiguous wake
+  // can never auto-dispatch — not while live, and not after expiry either:
+  // an expired marker routes to the operator re-review queue
+  // (`listWakesNeedingQuarantineReview`, F-B) instead of becoming
+  // dispatchable. `outbox` carries the persistent lifecycle records.
   //
   // Backoff: attempts-driven bounded exponential backoff with jitter for
   // TRANSIENT transport failures only (429/5xx/network/timeout). Quota
@@ -1358,9 +1387,94 @@ export class SwarmStore {
     return { holder: row.holder, fencingToken: row.fencing_token, expiresAt: row.expires_at };
   }
 
+  /**
+   * F-A fencing high-water (M8; M5 IntegrationLock precedent): `deleteLease`
+   * DELETES the `leases` row so `getWakeLeaseInfo` stays null-after-release,
+   * but a bare DELETE resets the next acquire token to 1 — the same token
+   * repeats across release/re-acquire cycles. This table retains the
+   * monotonic high-water per member-turn `resource_key` so every acquire
+   * strictly exceeds every previously issued token, including across
+   * release cycles and restarts. Quarantine markers (`wake-quarantine:*`)
+   * are per-wake single-use (never re-acquired under the same key) and are
+   * excluded, so the table cannot grow one row per wake.
+   * Service-owned ensure (CREATE TABLE IF NOT EXISTS, same precedent as
+   * the M5 `integration_runs` ensure): safe on legacy DBs that predate
+   * this table. FAIL-CLOSED: any DDL/read/write failure throws — never a
+   * silent fallback that could let the next token reuse a retired value.
+   */
+  private static readonly FENCING_HIGH_WATER_DDL = `CREATE TABLE IF NOT EXISTS lease_fencing_high_water (
+  resource_key TEXT PRIMARY KEY,
+  fencing_token INTEGER NOT NULL
+);`;
+
+  private ensureFencingHighWater(): void {
+    try {
+      this.db.exec(SwarmStore.FENCING_HIGH_WATER_DDL);
+    } catch (err) {
+      throw new Error(
+        `Fencing high-water unavailable (DDL failed, fail-closed): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  private readFencingHighWater(resourceKey: string): number {
+    this.ensureFencingHighWater();
+    let row: { fencing_token: number } | null;
+    try {
+      row = this.db
+        .query<{ fencing_token: number }, [string]>(
+          "SELECT fencing_token FROM lease_fencing_high_water WHERE resource_key = ?",
+        )
+        .get(resourceKey);
+    } catch (err) {
+      throw new Error(
+        `Fencing high-water unavailable (read failed, fail-closed): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    const value = row?.fencing_token;
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+  }
+
+  private recordFencingHighWater(resourceKey: string, token: number): void {
+    const safe = Number.isFinite(token) && token >= 0 ? Math.floor(token) : 0;
+    try {
+      this.ensureFencingHighWater();
+      this.db
+        .query<[], [string, number]>(
+          "INSERT INTO lease_fencing_high_water (resource_key, fencing_token) VALUES (?, ?) " +
+            "ON CONFLICT(resource_key) DO UPDATE SET fencing_token = excluded.fencing_token " +
+            "WHERE excluded.fencing_token > lease_fencing_high_water.fencing_token",
+        )
+        .run(resourceKey, safe);
+    } catch (err) {
+      throw new Error(
+        `Fencing high-water write failed (fail-closed): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   private writeLease(resourceKey: string, holder: string, now: string, ttlMs: number): { fencingToken: number; expiresAt: string } {
+    // F-A: seed from the durable high-water so a token can never repeat
+    // across release/re-acquire cycles (`deleteLease` removes the `leases`
+    // row, so the live row alone always restarts at 1). The high-water is
+    // reserved BEFORE the lease write: a crash between the two leaves a
+    // gap (safe), never a reuse. The caller holds the write txn, so the
+    // reserve+write pair is atomic on the happy path.
+    let highWater = 0;
+    const tracked = resourceKey.startsWith("member-turn:");
+    if (tracked) highWater = this.readFencingHighWater(resourceKey);
     const existing = this.readLease(resourceKey);
-    const fencingToken = (existing?.fencingToken ?? 0) + 1;
+    const liveToken =
+      typeof existing?.fencingToken === "number" &&
+      Number.isFinite(existing.fencingToken) &&
+      existing.fencingToken >= 0
+        ? Math.floor(existing.fencingToken)
+        : 0;
+    const fencingToken = Math.max(liveToken, highWater) + 1;
+    if (!Number.isFinite(fencingToken) || fencingToken <= 0) {
+      throw new Error(`Fencing token overflow (fail-closed) for ${resourceKey}`);
+    }
+    if (tracked) this.recordFencingHighWater(resourceKey, fencingToken);
     const expiresAt = new Date(Date.parse(now) + ttlMs).toISOString();
     this.db
       .query<[], [string, string, number, string]>(
@@ -1475,11 +1589,15 @@ export class SwarmStore {
         });
         return { status: "deferred-live-turn", intent: this.toWake(row) };
       }
-      // Quarantine marker: ambiguous wakes never auto-dispatch.
+      // Quarantine marker: ambiguous wakes never auto-dispatch (F-B).
+      // A LIVE marker defers with reason "quarantined"; a TTL-EXPIRED
+      // marker defers with "quarantine-expired-needs-review" and waits for
+      // the operator re-review queue — expiry never re-admits the wake.
       const quarantine = this.readLease(this.quarantineKeyForWake(id));
-      if (this.leaseLive(quarantine, now)) {
+      if (quarantine !== null) {
         this.wakeLifecycleEvent("wake_deferred", id, {
-          wakeId: id, memberId: row.member_id, correlationId, reason: "quarantined",
+          wakeId: id, memberId: row.member_id, correlationId,
+          reason: this.leaseLive(quarantine, now) ? "quarantined" : "quarantine-expired-needs-review",
         });
         return { status: "deferred-quarantined", intent: this.toWake(row) };
       }
@@ -1832,9 +1950,10 @@ export class SwarmStore {
         return { status: "deferred-live-turn", intent: this.toWake(row) };
       }
       const quarantine = this.readLease(this.quarantineKeyForWake(id));
-      if (this.leaseLive(quarantine, now)) {
+      if (quarantine !== null) {
         this.wakeLifecycleEvent("wake_deferred", id, {
-          wakeId: id, memberId: row.member_id, correlationId, reason: "quarantined",
+          wakeId: id, memberId: row.member_id, correlationId,
+          reason: this.leaseLive(quarantine, now) ? "quarantined" : "quarantine-expired-needs-review",
         });
         return { status: "deferred-quarantined", intent: this.toWake(row) };
       }
@@ -1874,8 +1993,11 @@ export class SwarmStore {
 
   /**
    * Quarantine an ambiguous wake (lost-ack, unknown admission outcome):
-   * persistent 24h marker + outbox record, NO state change, NO resubmit.
-   * Clear only via clearWakeQuarantine after operator review.
+   * persistent marker + outbox record, NO state change, NO resubmit.
+   * F-B: the marker blocks auto-dispatch while live AND after its TTL
+   * elapses (expired markers wait in `listWakesNeedingQuarantineReview`,
+   * never auto-admit). Clear only via clearWakeQuarantine after operator
+   * review, or close terminally via cancelStaleWake.
    */
   quarantineWake(id: string, reason: string, correlationId?: string): WakeIntent {
     return this.txn(() => {
@@ -1909,6 +2031,56 @@ export class SwarmStore {
   /** True when a live (unexpired) quarantine marker names this wake. */
   isWakeQuarantined(id: string, now?: string): boolean {
     return this.leaseLive(this.readLease(this.quarantineKeyForWake(id)), now ?? nowIso());
+  }
+
+  /**
+   * F-B: true when a quarantine marker exists for this wake AND its TTL
+   * has elapsed — operator re-review is due. The wake is still blocked
+   * from auto-dispatch (claim/reacquire/eligible-list gates treat any
+   * marker as quarantined); it becomes dispatchable only via
+   * `clearWakeQuarantine` after review, or terminal via `cancelStaleWake`.
+   */
+  isWakeQuarantineReviewDue(id: string, now?: string): boolean {
+    const marker = this.readLease(this.quarantineKeyForWake(id));
+    if (marker === null) return false;
+    return !this.leaseLive(marker, now ?? nowIso());
+  }
+
+  /**
+   * F-B operator re-review queue: every quarantined wake in the swarm —
+   * live markers AND TTL-expired ones — oldest expiry first. Expiry never
+   * auto-admits: expired entries stay blocked until an operator clears
+   * (re-review, dispatchable again) or cancels (terminal) them.
+   * `quarantinedForMs` is the approximate age of the marker (TTL minus
+   * remaining; markers carry expiry only, clamped at 0).
+   */
+  listWakesNeedingQuarantineReview(swarmId: string, now?: string): QuarantineReviewItem[] {
+    const nowIsoValue = now ?? nowIso();
+    const nowMs = Date.parse(nowIsoValue);
+    const markers = this.db
+      .query<{ resource_key: string; expires_at: string }, []>(
+        "SELECT resource_key, expires_at FROM leases WHERE resource_key LIKE 'wake-quarantine:%' ORDER BY expires_at ASC",
+      )
+      .all();
+    const items: QuarantineReviewItem[] = [];
+    for (const marker of markers) {
+      const wakeId = marker.resource_key.slice("wake-quarantine:".length);
+      const row = this.db.query<WakeRow, [string]>("SELECT * FROM wake_intents WHERE id = ?").get(wakeId);
+      if (row === null || row.swarm_id !== swarmId) continue;
+      const remainingMs = Date.parse(marker.expires_at) - nowMs;
+      items.push({
+        wakeId,
+        swarmId: row.swarm_id,
+        memberId: row.member_id,
+        wakeState: row.state as WakeState,
+        quarantineExpiresAt: marker.expires_at,
+        reviewDue: !this.leaseLive({ expiresAt: marker.expires_at }, nowIsoValue),
+        quarantinedForMs: Number.isFinite(remainingMs)
+          ? Math.max(0, WAKE_QUARANTINE_TTL_MS - remainingMs)
+          : WAKE_QUARANTINE_TTL_MS,
+      });
+    }
+    return items;
   }
 
   /** Cancel a stale wake (killed/stale-generation found by the reconciler). */
@@ -1972,7 +2144,9 @@ export class SwarmStore {
       }
       if (member.generation !== row.member_generation) continue;
       const quarantine = this.readLease(this.quarantineKeyForWake(row.id));
-      if (this.leaseLive(quarantine, now)) continue;
+      // F-B: live OR TTL-expired markers both exclude the wake. Expiry
+      // routes to the operator re-review queue — never back to dispatch.
+      if (quarantine !== null) continue;
       if (row.attempts > 0 && wakeNotBeforeMs(row.updated_at, row.attempts, baseMs, capMs, nowMs) > nowMs) continue;
       const live = this.db
         .query<{ id: string }, [string]>(

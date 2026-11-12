@@ -10,6 +10,12 @@
  */
 import { describe, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { SwarmStore } from "../../db/store.js";
+import { WakeDispatcher, type DispatchHarness } from "../wake-dispatcher.js";
+import { WakeQueue } from "../wake-queue.js";
 import {
   AUTH_RESUME_TRIGGERS,
   BlockRegistry,
@@ -659,6 +665,201 @@ describe("rate limiter M8-01-FIX-01 F-M8-03: dispatcher parity (auth never retri
       expect(isDispatchQuotaError(err)).toBe(quota);
       expect(isDispatchAuthError(err)).toBe(limiter === "auth-blocked");
       expect(isTransientError(err)).toBe(transient);
+    }
+  });
+});
+
+describe("dispatcher usage-ledger wiring (M8-FIX-COMPAT-01 F-M8R-01)", () => {
+  /** Distinctive payload marker: must NEVER appear in any ledger row. */
+  const LEAK_MARKER = "LEDGER-LEAK-PROBE-7f3a-brief-text";
+
+  class FakeLedgerHarness implements DispatchHarness {
+    failures = new Map<string, unknown>();
+    submitted = 0;
+    async submitTurn(_request: {
+      readonly sessionId: string;
+      readonly text: string;
+      readonly delivery: "queue";
+      readonly externalId: string;
+      readonly reason: "mention" | "assigned_task" | "verifier_request" | "monitor_intervention" | "user_direct";
+    }): Promise<{ readonly externalId: string; readonly admittedAt: string; readonly transportNote: string }> {
+      const failure = this.failures.get(_request.sessionId);
+      if (failure !== undefined) throw failure;
+      this.submitted += 1;
+      return { externalId: _request.externalId, admittedAt: new Date().toISOString(), transportNote: "fake" };
+    }
+    async getSession(_sessionId: string): Promise<{
+      readonly hasLiveExecution: boolean;
+      readonly knownTerminalExternalIds: readonly string[];
+    }> {
+      return { hasLiveExecution: false, knownTerminalExternalIds: [] };
+    }
+  }
+
+  function setupLedgerDispatch(): {
+    dir: string;
+    store: SwarmStore;
+    swarmId: string;
+    memberId: string;
+    ledgerDb: Database;
+    ledger: UsageLedger;
+    harness: FakeLedgerHarness;
+    queue: WakeQueue;
+  } {
+    const dir = mkdtempSync(join(tmpdir(), "m8r-ledger-"));
+    const store = new SwarmStore(join(dir, "state.sqlite"));
+    const swarmId = store.createSwarm({
+      title: "m8r ledger",
+      coordinatorSessionId: "sess-lead",
+      projectRoot: "/tmp/m8r-ledger",
+      mode: "parity",
+    }).id;
+    const memberId = store.transitionMember(
+      store.addMember(swarmId, {
+        name: "coder-ledger",
+        role: "coder",
+        nativeAgentId: "fake-agent",
+        sessionId: "sess-ledger",
+        model: { providerID: "fake-provider", id: "fake-model" },
+      }).id,
+      "waiting",
+    ).id;
+    const ledgerDb = new Database(":memory:");
+    const ledger = new UsageLedger(ledgerDb);
+    const harness = new FakeLedgerHarness();
+    return { dir, store, swarmId, memberId, ledgerDb, ledger, harness, queue: new WakeQueue(store) };
+  }
+
+  function teardown(t: { dir: string; store: SwarmStore; ledgerDb: Database }): void {
+    try {
+      t.store.close();
+    } finally {
+      t.ledgerDb.close();
+      rmSync(t.dir, { recursive: true, force: true });
+    }
+  }
+
+  type LedgerRow = {
+    swarm_id: string | null;
+    member_id: string | null;
+    wake_id: string | null;
+    task_id: string | null;
+    provider_id: string;
+    model_id: string;
+    attempt: number;
+    input_tokens: number;
+    output_tokens: number;
+    cost_micro: number;
+    outcome: string;
+    correlation_id: string | null;
+  };
+
+  function allRows(ledgerDb: Database): LedgerRow[] {
+    return ledgerDb.query<LedgerRow, []>("SELECT * FROM usage_ledger ORDER BY id").all();
+  }
+
+  test("dispatched (succeeded) intent records a refs-only row with real member refs", async () => {
+    const t = setupLedgerDispatch();
+    try {
+      const taskId = t.store.createTask(t.swarmId, {
+        title: "ledger probe task",
+        brief: `probe brief ${LEAK_MARKER} must stay out of the ledger`,
+      }).id;
+      const wakeId = t.queue.enqueue({
+        swarmId: t.swarmId, memberId: t.memberId, reason: "mention", postSequence: 1, taskId, payloadHash: "ledger-ph-1",
+      }).intent.id;
+      const dispatcher = new WakeDispatcher(t.store, t.harness, undefined, {
+        now: () => new Date("2026-11-11T00:00:00.000Z").toISOString(),
+        random: () => 0,
+      }, t.ledger);
+      const res = await dispatcher.dispatchWake(t.swarmId, wakeId);
+      expect(res.status).toBe("dispatched");
+      expect(t.ledger.count()).toBe(1);
+      const rows = allRows(t.ledgerDb);
+      expect(rows.length).toBe(1);
+      const row = rows[0] as LedgerRow;
+      expect(row.provider_id).toBe("fake-provider");
+      expect(row.model_id).toBe("fake-model");
+      expect(row.member_id).toBe(t.memberId);
+      expect(row.wake_id).toBe(wakeId);
+      expect(row.task_id).toBe(taskId);
+      expect(row.swarm_id).toBe(t.swarmId);
+      expect(row.outcome).toBe("dispatched");
+      expect(row.input_tokens).toBe(0);
+      expect(row.output_tokens).toBe(0);
+      // Unobserved cost is recorded as 0 — never estimated.
+      expect(row.cost_micro).toBe(0);
+      // Refs + counts + statuses only: payload text never lands in the ledger.
+      expect(JSON.stringify(row)).not.toContain(LEAK_MARKER);
+    } finally {
+      teardown(t);
+    }
+  });
+
+  test("failed-permanent terminal intent records a row; throwing ledger never breaks dispatch", async () => {
+    const t = setupLedgerDispatch();
+    try {
+      const wakeId = t.queue.enqueue({
+        swarmId: t.swarmId, memberId: t.memberId, reason: "mention", postSequence: 2, payloadHash: "ledger-ph-2",
+      }).intent.id;
+      t.harness.failures.set("sess-ledger", Object.assign(new Error("400 Bad Request (no inference)"), { status: 400 }));
+      const dispatcher = new WakeDispatcher(t.store, t.harness, undefined, {
+        now: () => new Date("2026-11-11T00:00:00.000Z").toISOString(),
+        random: () => 0,
+      }, t.ledger);
+      const res = await dispatcher.dispatchWake(t.swarmId, wakeId);
+      expect(res.status).toBe("failed-permanent");
+      expect(t.ledger.count()).toBe(1);
+      const rows = allRows(t.ledgerDb);
+      const row = rows[0] as LedgerRow;
+      expect(row.outcome).toBe("failed-permanent");
+      expect(row.provider_id).toBe("fake-provider");
+      expect(row.model_id).toBe("fake-model");
+      expect(row.member_id).toBe(t.memberId);
+      expect(row.wake_id).toBe(wakeId);
+      expect(row.cost_micro).toBe(0);
+    } finally {
+      teardown(t);
+    }
+    // A ledger that throws must not change dispatch semantics.
+    const t2 = setupLedgerDispatch();
+    try {
+      const wakeId = t2.queue.enqueue({
+        swarmId: t2.swarmId, memberId: t2.memberId, reason: "mention", postSequence: 3, payloadHash: "ledger-ph-3",
+      }).intent.id;
+      const throwing = { record: (): number => { throw new Error("ledger down (no inference)"); } };
+      const dispatcher = new WakeDispatcher(t2.store, t2.harness, undefined, {
+        now: () => new Date("2026-11-11T00:00:00.000Z").toISOString(),
+        random: () => 0,
+      }, throwing);
+      const res = await dispatcher.dispatchWake(t2.swarmId, wakeId);
+      expect(res.status).toBe("dispatched");
+      expect(t2.harness.submitted).toBe(1);
+    } finally {
+      teardown(t2);
+    }
+  });
+
+  test("quota-blocked records quota-paused with zero unobserved cost", async () => {
+    const t = setupLedgerDispatch();
+    try {
+      const wakeId = t.queue.enqueue({
+        swarmId: t.swarmId, memberId: t.memberId, reason: "mention", postSequence: 4, payloadHash: "ledger-ph-4",
+      }).intent.id;
+      t.harness.failures.set("sess-ledger", Object.assign(new Error("402 quota (no inference)"), { status: 402, code: "QUOTA_EXHAUSTED" }));
+      const dispatcher = new WakeDispatcher(t.store, t.harness, undefined, {
+        now: () => new Date("2026-11-11T00:00:00.000Z").toISOString(),
+        random: () => 0,
+      }, t.ledger);
+      const res = await dispatcher.dispatchWake(t.swarmId, wakeId);
+      expect(res.status).toBe("quota-blocked");
+      const rows = allRows(t.ledgerDb);
+      expect(rows.length).toBe(1);
+      expect((rows[0] as LedgerRow).outcome).toBe("quota-paused");
+      expect((rows[0] as LedgerRow).cost_micro).toBe(0);
+      expect((rows[0] as LedgerRow).member_id).toBe(t.memberId);
+    } finally {
+      teardown(t);
     }
   });
 });

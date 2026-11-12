@@ -50,6 +50,19 @@ export class PathPolicyError extends Error {
 const DRIVE_RE = /^[A-Za-z]:([\\/]|$)/;
 const UNC_RE = /^\\\\[^\\/]+\\[^\\/]+([\\/]|$)/;
 
+/**
+ * M8 COMPAT F-02: Windows reserved device names. The basename (sans
+ * extension), with trailing dots/spaces stripped, case-insensitive:
+ * `CON`, `con.txt`, `COM1 `, `lpt9.log`, `aux.` all collide with devices
+ * on Windows and must never validate as ordinary path components.
+ */
+const WINDOWS_DEVICE_RE = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
+
+export function isWindowsDeviceSegment(seg: string): boolean {
+  const stem = (seg.split(".")[0] ?? "").replace(/[. ]+$/, "");
+  return stem !== "" && WINDOWS_DEVICE_RE.test(stem);
+}
+
 function isAbsoluteLike(p: string): boolean {
   return (
     p.startsWith("/") ||
@@ -71,8 +84,46 @@ export function normalizeForCompare(absPath: string): string {
   if (trimmed.length === 0) {
     throw new PathPolicyError("INVALID_PATH", "Path must not be empty", {});
   }
+  // M8 COMPAT F-02: embedded NUL bytes are never valid in a path —
+  // fail closed before any comparison or filesystem use.
+  if (trimmed.includes("\0")) {
+    throw new PathPolicyError("INVALID_PATH", "Path must not contain NUL bytes", { path: trimmed });
+  }
   // Forward slashes are valid Windows separators — unify first.
   let p = trimmed.replace(/\//g, "\\");
+
+  // M8 COMPAT F-01: long-prefix (`\\?\`) and device (`\\.\`) spellings
+  // must compare in the SAME namespace as plain paths. Without this a
+  // prefixed spelling parses as UNC server `?`/`.`, so it can never
+  // match (or be denied against) its canonical root. Strip to the
+  // drive/UNC form; namespaces with no lexical drive mapping fail closed.
+  const longPrefix = p.match(/^\\\\([?.])\\(.*)$/s);
+  if (longPrefix !== null) {
+    const kind = longPrefix[1];
+    const body = longPrefix[2] ?? "";
+    if (kind === "?") {
+      const uncBody = body.match(/^UNC\\(.*)$/i);
+      if (uncBody !== null) {
+        p = `\\\\${uncBody[1] ?? ""}`;
+      } else if (/^[A-Za-z]:($|\\)/.test(body)) {
+        p = body;
+      } else {
+        throw new PathPolicyError("INVALID_PATH", `Unmappable extended-length path: ${trimmed}`, { path: trimmed });
+      }
+    } else if (/^[A-Za-z]:($|\\)/.test(body)) {
+      // `\\.\C:\...` — the only device-namespace spelling with a
+      // lexical drive mapping (`\\.\COM1`, `\\.\PhysicalDrive0`, … deny).
+      p = body;
+    } else {
+      throw new PathPolicyError("INVALID_PATH", `Unmappable device-namespace path: ${trimmed}`, { path: trimmed });
+    }
+  }
+  // NT object-manager namespaces (`\Device\…`, `\??\…`) have no lexical
+  // drive mapping — treating them as drive-relative rooted paths would
+  // mis-confine them, so they fail closed here.
+  if (/^\\(\?\?|device)(\\|$)/i.test(p)) {
+    throw new PathPolicyError("INVALID_PATH", `Unmappable NT-namespace path: ${trimmed}`, { path: trimmed });
+  }
 
   let root: string;
   let rest: string;
@@ -113,6 +164,12 @@ export function normalizeForCompare(absPath: string): string {
       // within-root check downstream still rejects escapes because the
       // RELATIVE candidate was joined under the root first.
       continue;
+    }
+    // M8 COMPAT F-02: reserved device names are never ordinary
+    // components — fail closed (covers every component, any case,
+    // with or without extension).
+    if (isWindowsDeviceSegment(seg)) {
+      throw new PathPolicyError("INVALID_PATH", `Reserved Windows device name: ${seg}`, { path: trimmed });
     }
     out.push(seg);
   }

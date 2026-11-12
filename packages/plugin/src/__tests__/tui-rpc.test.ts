@@ -316,17 +316,21 @@ describe("M6-03 RPC versioned-schema validation", () => {
 
   test("non-finite pagination fails closed as invalid_pagination; huge limits clamp to 100", async () => {
     const seen: unknown[] = [];
-    const handlers = createSwarmRpcHandlers({
-      snapshot: async (swarmId: string) => ({
-        swarm: { id: swarmId, title: "T", status: "active" },
-        members: [],
-        tasks: [],
-      }),
-      listPosts: async (swarmId: string, after = 0, limit = 100) => {
-        seen.push([swarmId, after, limit]);
-        return { posts: [], after };
+    const handlers = createSwarmRpcHandlers(
+      {
+        snapshot: async (swarmId: string) => ({
+          swarm: { id: swarmId, title: "T", status: "active" },
+          members: [],
+          tasks: [],
+        }),
+        listPosts: async (swarmId: string, after = 0, limit = 100) => {
+          seen.push([swarmId, after, limit]);
+          return { posts: [], after };
+        },
       },
-    });
+      // SEC-F01: wired reads require the lane-authenticated caller binding.
+      { kind: "plugin-host" },
+    );
     for (const bad of [{ after: Number.NaN }, { after: Number.POSITIVE_INFINITY }, { limit: Number.NaN }, { limit: "25" }]) {
       const calls: { type: string; message: string }[] = [];
       await handlers.boardPosts(
@@ -356,20 +360,24 @@ describe("M6-03 RPC versioned-schema validation", () => {
 
   test("wired reader serves versioned snapshot and posts-after reads", async () => {
     const seen: { snapshot: string[]; posts: unknown[] } = { snapshot: [], posts: [] };
-    const handlers = createSwarmRpcHandlers({
-      snapshot: async (swarmId: string) => {
-        seen.snapshot.push(swarmId);
-        return {
-          swarm: { id: swarmId, title: "T", status: "active" },
-          members: [{ id: "m-1", name: "w", role: "coder", sessionId: "sess-1" }],
-          tasks: [{ id: "t-1", title: "T1", state: "open" }],
-        };
+    const handlers = createSwarmRpcHandlers(
+      {
+        snapshot: async (swarmId: string) => {
+          seen.snapshot.push(swarmId);
+          return {
+            swarm: { id: swarmId, title: "T", status: "active" },
+            members: [{ id: "m-1", name: "w", role: "coder", sessionId: "sess-1" }],
+            tasks: [{ id: "t-1", title: "T1", state: "open" }],
+          };
+        },
+        listPosts: async (swarmId: string, after = 0, limit = 100) => {
+          seen.posts.push([swarmId, after, limit]);
+          return { posts: [{ sequence: 1 }], after: 1 };
+        },
       },
-      listPosts: async (swarmId: string, after = 0, limit = 100) => {
-        seen.posts.push([swarmId, after, limit]);
-        return { posts: [{ sequence: 1 }], after: 1 };
-      },
-    });
+      // SEC-F01: wired reads require the lane-authenticated caller binding.
+      { kind: "plugin-host" },
+    );
     const context = {
       signal: new AbortController().signal,
       error: fakeErrorFactory([]),
@@ -387,6 +395,93 @@ describe("M6-03 RPC versioned-schema validation", () => {
     expect(posts["after"]).toBe(1);
     expect(seen.snapshot).toEqual(["s-9"]);
     expect(seen.posts).toEqual([["s-9", 0, 25]]);
+  });
+});
+
+describe("SEC-F01 RPC caller scoping", () => {
+  function spyReader(seen: { snapshot: number; posts: number }) {
+    return {
+      snapshot: async (swarmId: string) => {
+        seen.snapshot += 1;
+        return { swarm: { id: swarmId, title: "T", status: "active" }, members: [], tasks: [] };
+      },
+      listPosts: async (swarmId: string, after = 0, limit = 100) => {
+        seen.posts += 1;
+        return { posts: [], after };
+      },
+    };
+  }
+
+  function validInput(method: "boardSnapshot" | "boardPosts") {
+    return method === "boardSnapshot"
+      ? { swarmId: "s-1", schemaVersion: SWARM_RPC_SCHEMA_VERSION }
+      : { swarmId: "s-1", after: 0, limit: 25, schemaVersion: SWARM_RPC_SCHEMA_VERSION };
+  }
+
+  test("wired reader without a caller binding fails closed with invalid_caller and zero reader side effects", async () => {
+    for (const method of ["boardSnapshot", "boardPosts"] as const) {
+      const seen = { snapshot: 0, posts: 0 };
+      const handlers = createSwarmRpcHandlers(spyReader(seen));
+      const calls: { type: string; message: string }[] = [];
+      await handlers[method](validInput(method), {
+        signal: new AbortController().signal,
+        error: fakeErrorFactory(calls),
+      });
+      expect(calls.map((c) => c.type)).toEqual(["invalid_caller"]);
+      expect(seen).toEqual({ snapshot: 0, posts: 0 });
+    }
+  });
+
+  test("empty-bearer, non-loopback, and unparseable daemon-bearer callers fail closed with zero side effects", async () => {
+    const unauthorized = [
+      { kind: "daemon-bearer", bearer: "", baseUrl: "http://127.0.0.1:4788" },
+      { kind: "daemon-bearer", bearer: "valid-bearer-token-0123456789", baseUrl: "http://10.0.0.9:4788" },
+      { kind: "daemon-bearer", bearer: "valid-bearer-token-0123456789", baseUrl: "not-a-url" },
+    ] as const;
+    for (const caller of unauthorized) {
+      for (const method of ["boardSnapshot", "boardPosts"] as const) {
+        const seen = { snapshot: 0, posts: 0 };
+        const handlers = createSwarmRpcHandlers(spyReader(seen), caller);
+        const calls: { type: string; message: string }[] = [];
+        await handlers[method](validInput(method), {
+          signal: new AbortController().signal,
+          error: fakeErrorFactory(calls),
+        });
+        expect(calls.map((c) => c.type)).toEqual(["invalid_caller"]);
+        expect(seen).toEqual({ snapshot: 0, posts: 0 });
+      }
+    }
+  });
+
+  test("authorized daemon-bearer caller (loopback + bearer) serves wired reads", async () => {
+    for (const method of ["boardSnapshot", "boardPosts"] as const) {
+      const seen = { snapshot: 0, posts: 0 };
+      const handlers = createSwarmRpcHandlers(spyReader(seen), {
+        kind: "daemon-bearer",
+        bearer: "loopback-daemon-bearer-0123456789",
+        baseUrl: "http://127.0.0.1:4788",
+      });
+      const calls: { type: string; message: string }[] = [];
+      const result = (await handlers[method](validInput(method), {
+        signal: new AbortController().signal,
+        error: fakeErrorFactory(calls),
+      })) as Record<string, unknown>;
+      expect(calls).toEqual([]);
+      expect(result["schemaVersion"]).toBe(SWARM_RPC_SCHEMA_VERSION);
+      expect(seen.snapshot + seen.posts).toBe(1);
+    }
+  });
+
+  test("F-IR-03: unwired reader stays fail-closed daemon_unwired with no caller binding (no silent success)", async () => {
+    const handlers = createSwarmRpcHandlers();
+    for (const method of ["boardSnapshot", "boardPosts"] as const) {
+      const calls: { type: string; message: string }[] = [];
+      await handlers[method](validInput(method), {
+        signal: new AbortController().signal,
+        error: fakeErrorFactory(calls),
+      });
+      expect(calls.map((c) => c.type)).toEqual(["daemon_unwired"]);
+    }
   });
 });
 
