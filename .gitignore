@@ -31,3 +31,4 @@ dist/
 build/
 out/
 .turbo/
+.env

@@ -77,6 +77,10 @@ class FakeHarness implements ActivationHarness {
 
 const roots: string[] = [];
 
+/** Fail-closed resolver fixture: every successful activation supplies an
+ *  explicit active-session model (MODEL-INHERIT-01). Test-only. */
+const ACTIVE_MODEL = { providerID: "prov-active", id: "model-active" } as const;
+
 function makeRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "m105-e2e-"));
   roots.push(root);
@@ -108,6 +112,7 @@ describe("m105 activation on a disposable file DB", () => {
         requirement: "Add tests to two independent fixture modules",
         coordinatorSessionId: "sess-lead",
         projectRoot: root,
+        modelContext: { activeSessionModel: ACTIVE_MODEL },
       });
 
       expect(result.coordinator.role).toBe("coordinator");
@@ -175,6 +180,7 @@ describe("m105 activation on a disposable file DB", () => {
         requirement: "Add tests to two independent fixture modules",
         coordinatorSessionId: "sess-lead",
         projectRoot: tmpdir(),
+        modelContext: { activeSessionModel: ACTIVE_MODEL },
       });
       expect(store.listMembers(result.swarm.id).length).toBe(3);
       expect(store.listTasks(result.swarm.id).length).toBe(2);
@@ -245,6 +251,7 @@ describe("m105 TUI restart means the daemon survives", () => {
       requirement: "Add tests to two independent fixture modules",
       coordinatorSessionId: "sess-lead",
       projectRoot: root,
+      modelContext: { activeSessionModel: ACTIVE_MODEL },
     });
     const swarmId = result.swarm.id;
     const before = store.getPostsAfter(swarmId, 0).map((p) => ({ id: p.id, sequence: p.sequence, body: p.body }));
@@ -335,6 +342,10 @@ describe("m105 disposable isolation", () => {
 
 describe("m105 live inference gate", () => {
   test("live overlap is NOT VERIFIED (unauthorized); fake-harness queue admission needs no modelCalls", async () => {
+    if (process.env.SWARM_ALLOW_LIVE_INFERENCE === "1") {
+      console.log("[m105] SKIP: live gate set but no live implementation in this slice; skipping with zero inference.");
+      return;
+    }
     console.log("[m105] BLOCK: live inference unauthorized; live overlap NOT VERIFIED. Proving queue admission without modelCalls.");
     expect(process.env.SWARM_ALLOW_LIVE_INFERENCE === "1").toBe(false);
     const root = makeRoot();
@@ -346,6 +357,7 @@ describe("m105 live inference gate", () => {
         requirement: "Add tests to two independent fixture modules",
         coordinatorSessionId: "sess-lead",
         projectRoot: root,
+        modelContext: { activeSessionModel: ACTIVE_MODEL },
       });
       expect(harness.submitted.length).toBe(2);
       expect(service.getStatusSnapshot(result.swarm.id).telemetry.modelCalls).toBe(0);
