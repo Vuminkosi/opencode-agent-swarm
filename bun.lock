@@ -8,10 +8,6 @@
         "typescript": "5.9.2",
       },
     },
-    "packages/adapter-codex": {
-      "name": "@opencode-swarm/adapter-codex",
-      "version": "0.0.1",
-    },
     "packages/adapter-opencode": {
       "name": "@opencode-swarm/adapter-opencode",
       "version": "0.0.1",
@@ -168,8 +164,6 @@
     "@npmcli/redact": ["@npmcli/redact@4.0.0", "", {}, "sha512-gOBg5YHMfZy+TfHArfVogwgfBeQnKbbGo3pSUyK/gSI0AVu+pEiDVcKlQb0D8Mg1LNRZILZ6XG8I5dJ4KuAd9Q=="],
 
     "@npmcli/run-script": ["@npmcli/run-script@10.0.4", "", { "dependencies": { "@npmcli/node-gyp": "^5.0.0", "@npmcli/package-json": "^7.0.0", "@npmcli/promise-spawn": "^9.0.0", "node-gyp": "^12.1.0", "proc-log": "^6.0.0" } }, "sha512-mGUWr1uMnf0le2TwfOZY4SFxZGXGfm4Jtay/nwAa2FLNAKXUoUwaGwBMNH36UHPtinWfTSJ3nqFQr0091CxVGg=="],
-
-    "@opencode-swarm/adapter-codex": ["@opencode-swarm/adapter-codex@workspace:packages/adapter-codex"],
 
     "@opencode-swarm/adapter-opencode": ["@opencode-swarm/adapter-opencode@workspace:packages/adapter-opencode"],
 
