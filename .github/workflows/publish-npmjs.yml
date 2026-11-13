@@ -1,7 +1,7 @@
 # Release publish — build, verify, and publish to npmjs.org (public npm registry).
 #
 # Pipeline: GitHub Release "published" (or manual dispatch) -> verify job
-# (Bun install, tsc x4, scoped bun test, no live inference) -> publish job
+# (Bun install, tsc x7, scoped bun test, no live inference) -> publish job
 # (npm publish --provenance to https://registry.npmjs.org, private pkgs skipped).
 #
 # Mirror of `.github/workflows/publish.yml` (GitHub Packages lane) with two
@@ -70,12 +70,15 @@ jobs:
       - name: Install (frozen lockfile)
         run: bun install --frozen-lockfile
 
-      - name: Typecheck (all 4 package tsconfigs)
+      - name: Typecheck (all 7 package tsconfigs)
         run: |
           bunx tsc --noEmit -p packages/protocol/tsconfig.json
           bunx tsc --noEmit -p packages/runtime/tsconfig.json
           bunx tsc --noEmit -p packages/adapter-opencode/tsconfig.json
           bunx tsc --noEmit -p packages/plugin/tsconfig.json
+          bunx tsc --noEmit -p packages/verification/tsconfig.json
+          bunx tsc --noEmit -p packages/board-terminal/tsconfig.json
+          bunx tsc --noEmit -p packages/git-workspaces/tsconfig.json
 
       # Scoped suite = FINAL-POSTCOMMIT-01 list. bun:test only; no live
       # inference, no network, no paid resources (e2e uses fake harness +
@@ -89,6 +92,9 @@ jobs:
           bun test packages/adapter-opencode/src/__tests__/bridge.test.ts
           bun test packages/runtime/src/services/__tests__/swarm-service.test.ts
           bun test packages/plugin/src/commands/__tests__/swarm-command.test.ts
+          bun test packages/verification/src/__tests__/
+          bun test packages/board-terminal/src/__tests__/
+          bun test packages/git-workspaces/src/__tests__/
           bun test examples/two-module-fixture/
           bun test tests/e2e/
 
@@ -137,6 +143,11 @@ jobs:
       # Any package marked private is SKIPPED with a logged reason.
       # apps/swarmctl is NOT a workspace and stays in the loop for visibility;
       # while private=true it is skipped (see docs/publishing.md).
+      # Loop tokens must match on-disk directory case EXACTLY: ubuntu runners
+      # are case-sensitive, so a wrong-case token hits the "no package.json"
+      # skip below and would silently skip a package that should publish.
+      # The published-attempt counter after the loop turns an all-skip run
+      # (including a total case-drift/eventual empty loop) into a loud failure.
       # The explicit --registry flag targets npmjs.org and overrides the GPR
       # publishConfig.registry in package.json manifests (which this lane must
       # NOT edit). Exit code propagates: any real `npm publish` failure fails
@@ -146,6 +157,7 @@ jobs:
       - name: Publish public packages (private packages skipped)
         run: |
           fail=0
+          published=0
           for PKG in packages/protocol packages/runtime packages/verification packages/adapter-opencode packages/plugin packages/board-terminal packages/git-workspaces apps/swarmctl; do
             if [ ! -f "$PKG/package.json" ]; then
               echo "skip $PKG: no package.json"
@@ -158,5 +170,10 @@ jobs:
             fi
             echo "publish $PKG"
             (cd "$PKG" && npm publish --provenance --registry https://registry.npmjs.org) || fail=1
+            published=$((published+1))
           done
+          if [ "$published" -eq 0 ]; then
+            echo "ERROR: no packages published — every loop entry was skipped; refusing green empty publish" >&2
+            fail=1
+          fi
           exit $fail
