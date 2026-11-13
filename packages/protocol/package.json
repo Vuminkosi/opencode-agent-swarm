@@ -3,10 +3,11 @@
   "version": "0.1.0",
   "publishConfig": {
     "access": "public",
-    "registry": "https://npm.pkg.github.com",
-    "provenance": true
+    "registry": "https://registry.npmjs.org"
   },
-  "files": ["src"],
+  "files": [
+    "src"
+  ],
   "type": "module",
   "description": "M1-01 versioned wire protocol: Zod-single-source schemas for Swarm/Member/Task/BoardPost/WakeIntent/VerificationEvidence (spec §5).",
   "exports": {
