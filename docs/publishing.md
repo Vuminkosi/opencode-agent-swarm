@@ -84,3 +84,58 @@ out of scope for this task.
 (`actions/setup-node@v6`) for npm compatibility, TypeScript `5.9.2` strict.
 Action major versions are pinned (`checkout@v5`, `setup-bun@v2`,
 `setup-node@v6`); refresh them via Dependabot or a docs/platform follow-up.
+
+## Publishing to npmjs.org (public npm registry)
+
+A second lane, `.github/workflows/publish-npmjs.yml`, mirrors `publish.yml`
+(same triggers, same pins, same verify steps) but publishes to the default
+public registry (`https://registry.npmjs.org`) instead of GitHub Packages.
+Use it when the packages should be installable without a GitHub-Packages
+`.npmrc` entry. GitHub Packages publishing (`publish.yml`) is unchanged and
+keeps working independently.
+
+### Scope-ownership prerequisite
+
+Packages are scoped `@vuminkosi/*`. Before the first real publish, the
+publisher's npm account must own the `@vuminkosi` scope (create it at
+npmjs.com if needed). Scope availability was checked unauthenticated via
+`npm view @vuminkosi/protocol version` and
+`npm view @vuminkosi/runtime version` against the default registry
+(404 = free) before the workflow was written. Re-check before the first
+publish: if `npm view` returns a version instead of 404, STOP — the scope is
+taken and nothing may publish under it.
+
+### Token setup (one time)
+
+1. Sign in at npmjs.com → Access Tokens → Generate New Token (granular or
+   classic) with **publish permission scoped to `@vuminkosi/*`**
+   (read+write for the scope; no broader permissions).
+2. Add it as a repository Actions secret named **`NPM_TOKEN`**
+   (GitHub → Settings → Secrets and variables → Actions → New repository
+   secret). The workflow reads it only as
+   `NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}`; it is never echoed, never
+   written to disk (the `.npmrc` references `${NODE_AUTH_TOKEN}` literally),
+   and no `set -x` / `env` dumps are allowed in the workflow.
+3. No other secret changes: the GitHub Packages token stays only in
+   `publish.yml` and is never used by this lane.
+
+### How to trigger
+
+Same as the GitHub Packages lane: publish a GitHub Release (Release
+`published` event), or run it manually (Actions tab → `publish-npmjs` →
+Run workflow). There is deliberately **no `push` trigger**. The `verify`
+job (frozen install, `tsc --noEmit` x4, scoped `bun test` suite) gates the
+`publish` job; the publish job runs only if verify passes.
+
+### How to verify
+
+1. Check the Actions log for `publish <dir>` vs `skip <dir>` lines
+   (packages with `"private": true` are skipped with a logged reason).
+2. Confirm the provenance attestation step ran (`--provenance`).
+3. Confirm the target registry in the log is `https://registry.npmjs.org`
+   (the per-command `--registry` flag overrides the GPR
+   `publishConfig.registry` in manifests; manifests are not edited).
+4. Install from the public registry with no special `.npmrc`:
+   `npm view @vuminkosi/protocol version` should now return the version.
+5. GitHub Packages publishing is unchanged: `publish.yml` still publishes
+   the same package set to `https://npm.pkg.github.com` on its own trigger.
