@@ -24,6 +24,20 @@ Full per-gate table: [m8 release qualification §10.5](../evidence/m8-release-qu
 - Implementation inputs satisfied (supplied): G1, G1-FIX (S2 closures, COMMIT-ready lanes), G2–G8-sim, G12-sim, G13, G14-supplied (514/0/14054/36, tsc 9/9, frozen-adapter 0 — VERIFIED-supplied, not fresh).
 - Blocking (NOT VERIFIED): G9 fresh-install smoke/E2E, G10 live inference/402-shape/spend, G11 live TUI mount (fallback applies), G12-live idle window.
 
+## OIDC lane note (additive, OIDC-S08 — not a decision change)
+
+Static OIDC package readiness is IMPLEMENTED at `62a218f` (unpublished
+targets: protocol 0.1.1, runtime 0.1.2, verification 0.1.2,
+adapter-opencode 0.0.2, plugin 0.0.2, board-terminal 0.1.1,
+git-workspaces 0.1.1; chain `5a0bfb8` → `e162b1d` → `2edb0a9` →
+`62a218f` — see [publishing.md](../publishing.md) OIDC status section and
+[release-notes-oidc-prep](release-notes-oidc-prep.md)). First-OIDC-workflow
+success is NOT YET OBSERVED (no publish run log), trusted-publisher
+registration is UNKNOWN (manual action required per package), and lockfile
+re-audit is PENDING — so the OIDC lane adds **no release evidence** and
+the decision below stays **`RELEASE_CANDIDATE_BLOCKED (Option A)`**,
+unchanged. The decision record block is untouched by this lane.
+
 ## Required evidence pointers (read before deciding)
 
 1. [m8 release qualification](../evidence/m8-release-qualification.md) — §§1–9 (`7d4d79b` base) + §10 (`895316a` fix amendment: S2 closures, full totals, checklist, pinned matrix, upgrade/rollback).
@@ -32,6 +46,7 @@ Full per-gate table: [m8 release qualification §10.5](../evidence/m8-release-qu
 4. [compatibility-report §14](../compatibility-report.md#14-m8-fix-compatibility-addendum-doc-m8-final-01) — fix hunks, digit-guard parity, ledger wiring, migration 004 note.
 5. [milestone-matrix](../milestone-matrix.md) — M8 + M8-FIX rows.
 6. Spec §14 M8 gate + milestone row 823 ([spec](../plan/spec.md) §14) — contract source, linked not duplicated.
+7. [release-notes-oidc-prep](release-notes-oidc-prep.md) + [publishing.md](../publishing.md) OIDC status section — unpublished targets and first-publish prerequisites (no release evidence).
 
 ## Decision record (master only)
 

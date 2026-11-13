@@ -480,3 +480,72 @@ fresh-install smoke/E2E required by spec §14 M8. [PROBE]
 - **Commit (COMMIT-01):** 49035b3, 4 files, 86 insertions, 3 deletions (git show --stat 49035b3, inspected). [PROBE]
 - **Post-commit (POST-01):** PASS-supplied: tsc both exit 0; 50 plus 60 plus 13 equals 123 pass, 0 fail (supplied handoff evidence, not re-executed here). [PROBE]
 - **Carry (unchanged):** F-04 402-shape NOT VERIFIED; live inference and live server NOT VERIFIED; release decision master-owned UNDECIDED-PENDING-MASTER. Commit is not a release. [PROBE]
+
+## 12. OIDC lane addendum at `62a218f` (OIDC-S08 — package-readiness record, not a release claim)
+
+> **Document status for this section only: IMPLEMENTED (static manifests
+> and workflow observed at `62a218f`) / COMMITTED (commits below,
+> verified `git show --stat`) / first OIDC publish NOT YET OBSERVED —
+> NOT VERIFIED / release decision stays master-owned
+> `RELEASE_CANDIDATE_BLOCKED (Option A)`.**
+> §§1–11 above are preserved unchanged; nothing below rewrites them. This
+> addendum links to the lane sources instead of restating them: the lane
+> contract is [publishing.md](../publishing.md) (OIDC lane sections +
+> § "OIDC lane status at HEAD `62a218f`"), the workflow source of truth is
+> `.github/workflows/publish-npmjs.yml` (lines 1–180 at HEAD), and the prep
+> notes are [release-notes-oidc-prep](../release/release-notes-oidc-prep.md).
+> No M0–M8 behavior is duplicated here.
+
+- **Baseline:** HEAD `62a218f1d5e5874d7896eaaacb07a06797edc313` —
+  `chore: resync bun.lock to OIDC version targets` (1 file, 9 insertions /
+  9 deletions). Prior chain: `5a0bfb8` (manifests default to npmjs.org) →
+  `e162b1d` (unpublished OIDC version targets) → `2edb0a9` (npmjs lane
+  registry-comment fix) → `62a218f` (HEAD). [PROBE — `git rev-parse HEAD`,
+  `git show --stat` × 4, inspected]
+- **Version targets (unpublished, NOT released):** `@vuminkosi/protocol`
+  0.1.1, `@vuminkosi/runtime` 0.1.2, `@vuminkosi/verification` 0.1.2,
+  `@vuminkosi/adapter-opencode` 0.0.2, `@vuminkosi/plugin` 0.0.2,
+  `@vuminkosi/board-terminal` 0.1.1, `@vuminkosi/git-workspaces` 0.1.1 —
+  each with `publishConfig.registry https://registry.npmjs.org`;
+  `apps/swarmctl` stays `private: true` and is skipped by the publish loop.
+  [PROBE — `package.json` inspection at HEAD; manifests not edited here]
+- **Applicable review lanes (supplied identifiers, per OIDC-S08):** S01 /
+  S02 / S07 / S04 gate coverage is cited as the lane set this addendum
+  answers to; no lane verdict is upgraded here, and no finding IDs are
+  invented beyond the supplied classes. [PROBE]
+- **Package readiness vs workflow success vs swarm readiness:** static
+  package readiness is IMPLEMENTED (table above, committed); first-OIDC-
+  workflow success is NOT YET OBSERVED — no `publish-npmjs` run log exists
+  in the repo, so OIDC minting, trusted-publisher acceptance, and
+  provenance attestation against npmjs.org are all NOT VERIFIED; overall
+  swarm readiness is unchanged — **G9 fresh-install smoke/E2E, G10 live
+  inference / 402-shape / spend, G11 live TUI mount, and G12-live idle
+  window stay NOT VERIFIED and blocking** (carried from §§2/10.5, not
+  re-argued here). [PROBE]
+- **Carried residuals (unchanged):** F-04 (harness 402-shape) NOT VERIFIED;
+  F-01 ACCEPTED RISK with revisit condition. The OIDC commits add no
+  inference path and no paid-service call, so neither residual is touched
+  by this lane. [PROBE]
+- **Dependency note:** the `62a218f` lockfile resync is version-number
+  alignment only, drafted against the `2edb0a9` gate evidence. **Lockfile
+  re-audit is PENDING** — no DEP-REAUDIT closing evidence exists in the
+  repo at this HEAD — so dependency closure is NOT claimed. Resumption:
+  run the re-audit at `62a218f` and record the log. [PROBE]
+- **Housekeeping:** `git status --porcelain` at dispatch was clean; this
+  docs task edits only its owned doc paths, never manifests, workflows,
+  `bun.lock`, sources, or secrets. No `.npmrc`, `.env`, or credential
+  content was read or is recorded here. [PROBE]
+
+### 12.1 OIDC claim-status summary (additive to §§9/10.10)
+
+| Claim | Status |
+|---|---|
+| OIDC version targets + npmjs.org `publishConfig` in 7 manifests | IMPLEMENTED (observed at `62a218f`) / COMMITTED (`5a0bfb8`, `e162b1d`) |
+| `bun.lock` resync to OIDC targets (9+/9−) | COMMITTED (`62a218f`); lockfile re-audit PENDING — NOT VERIFIED |
+| npmjs lane registry comment (npmjs.org default; GPR lane pins its own `--registry` at `publish.yml:133`) | COMMITTED (`2edb0a9`) |
+| Trusted publishers registered on npmjs.com per package | UNKNOWN → treated as NOT DONE — NOT VERIFIED (manual maintainer action required) |
+| Scope ownership of `@vuminkosi` by the publisher account | UNVERIFIED — NOT VERIFIED (re-check before first publish) |
+| First OIDC publish through `publish-npmjs` | NOT YET OBSERVED — NOT VERIFIED (no run log in repo) |
+| G9 / G10 / G11 / G12-live | NOT VERIFIED, BLOCKED (carried, unchanged) |
+| F-04 / F-01 | Carried unchanged (NOT VERIFIED / ACCEPTED RISK) |
+| Shipped / released / published / deployed / production-proven | NOT CLAIMED — targets are unpublished; decision BLOCKED |

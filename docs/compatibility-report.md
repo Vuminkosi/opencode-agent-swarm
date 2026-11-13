@@ -552,3 +552,29 @@ One untracked junk file `NUL` sits at the repo root; it is in neither M8 commit 
 3. Codex transport is honestly unbuilt — the four gating items above stay open; no stable-verb, session-identity, model-mapping, or snapshot claim is made. [DESIGN]
 4. Exactly-once physical delivery is not claimed; ambiguous admissions quarantine for operator review by design (TTL-bounded per [m8 qual §10.2](evidence/m8-release-qualification.md#102-s2-closures-supplied-phase-4-re-review-disposition-commit-ready-lanes)). [DESIGN]
 5. No live-server, screenshot, deployment, endpoint, CLI-flag, release, or support-promise claims are made in this addendum. [DESIGN]
+
+## 15. OIDC lane compatibility note (OIDC-S08, additive)
+
+> **Document status for this section only: IMPLEMENTED (static manifests
+> and workflow observed at `62a218f`) / COMMITTED (chain below) / first
+> OIDC publish NOT YET OBSERVED — NOT VERIFIED.** §§1–14 above are
+> unchanged; nothing below rewrites them. [DESIGN]
+
+- **Baseline:** HEAD `62a218f` (`chore: resync bun.lock to OIDC version
+  targets`); chain `5a0bfb8` (manifests default to npmjs.org) → `e162b1d`
+  (unpublished OIDC targets) → `2edb0a9` (npmjs lane registry-comment fix)
+  → `62a218f`. [PROBE]
+- **Surface impact: none.** The OIDC commits touch only `version` fields,
+  `publishConfig.registry` values (now `https://registry.npmjs.org`), one
+  workflow comment, and `bun.lock` version alignment. No runtime, API,
+  adapter, RPC, path-policy, migration, or toolchain surface changes —
+  §§1–14 verdicts are unaffected. `apps/swarmctl` stays `private: true`.
+  [DESIGN — IMPLEMENTED, live publish behavior NOT VERIFIED]
+- **Lane separation preserved:** the GitHub Packages lane pins its own
+  `--registry` at `publish.yml:133`; the npmjs lane overrides per-command
+  without editing manifests — the two lanes cannot shadow each other at
+  the manifest level. [DESIGN]
+- **Evidence:** [publishing.md](publishing.md) OIDC status section,
+  [release-notes-oidc-prep](release/release-notes-oidc-prep.md),
+  [m8 qual §12](evidence/m8-release-qualification.md). No live-server,
+  release, deployment, or support-promise claims are made here. [DESIGN]

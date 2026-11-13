@@ -49,4 +49,15 @@ Supplied re-review verdicts: **store / RPC / compat lanes COMMIT-ready, S2s clos
 3. Capture live-server contention evidence; re-examine F-01 (closes the ACCEPTED RISK revisit).
 4. Mount the native board in a disposable TUI host (or re-confirm the terminal-board fallback as the release surface).
 
+## 5. OIDC lane — preparation only, no release evidence (OIDC-S08, additive)
+
+Static package readiness at `62a218f` is IMPLEMENTED/COMMITTED
+(unpublished targets; chain `5a0bfb8` → `e162b1d` → `2edb0a9` →
+`62a218f` — see [publishing.md](../publishing.md)). Blocking for any
+first-publish claim: trusted-publisher registration UNKNOWN (manual action
+required per package), scope ownership UNVERIFIED, first `publish-npmjs`
+run NOT YET OBSERVED (no log), lockfile re-audit PENDING. Prep notes:
+[release-notes-oidc-prep](release-notes-oidc-prep.md). This lane changes
+no blocker above and approves nothing.
+
 **The release decision is master-owned.** This file is an input, never an approval — see [release-decision](release-decision.md) (`decision: UNDECIDED-PENDING-MASTER`). [DESIGN]

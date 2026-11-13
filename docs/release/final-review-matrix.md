@@ -39,3 +39,14 @@
 2. Full-suite totals (514/0/14054/36, tsc 9/9, frozen-adapter 0) are supplied M8-FULL/M8-FIX handoff evidence — VERIFIED-supplied, not fresh runs.
 3. Live inference / server / spend / 402-shape / TUI mount / fresh-install E2E: NOT VERIFIED (no live log, no credentials).
 4. No finding IDs are invented beyond the supplied S2-generic class; no new defect classes are claimed.
+
+## OIDC lane addendum (OIDC-S08 — additive, no verdict changed)
+
+Static OIDC package readiness at `62a218f` is IMPLEMENTED/COMMITTED
+(unpublished targets; chain `5a0bfb8` → `e162b1d` → `2edb0a9` →
+`62a218f`); first-OIDC-workflow success is NOT YET OBSERVED and adds no
+verdict here — area 9 stays NOT VERIFIED. Prep notes:
+[release-notes-oidc-prep](release-notes-oidc-prep.md); lane contract:
+[publishing.md](../publishing.md); readiness record:
+[m8 qual §12](../evidence/m8-release-qualification.md). Lockfile re-audit
+at `62a218f` is PENDING.

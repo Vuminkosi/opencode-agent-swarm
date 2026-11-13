@@ -184,3 +184,99 @@ job (frozen install, `tsc --noEmit` x4, scoped `bun test` suite) gates the
 6. Provenance fallback: if the npmjs.org registry ever rejects the
    `--provenance` attestation, remove the flag from the publish command and
    re-run — the verify job still gates every publish.
+
+## OIDC lane status at HEAD `62a218f` (addendum — OIDC-S08, read-only docs update)
+
+> **Document status for this section only: IMPLEMENTED (static manifests and
+> workflow observed at `62a218f`) / COMMITTED (commits below) / first
+> OIDC publish NOT YET OBSERVED — NOT VERIFIED / overall swarm readiness
+> still BLOCKED (live inference, live TUI mount, platform gates unresolved).**
+> This section records what the OIDC lane proves today and what it honestly
+> leaves open. Nothing here describes a package as shipped, released,
+> published, deployed, or production-proven: every version below is an
+> **unpublished preparation target**, and the release decision stays
+> `RELEASE_CANDIDATE_BLOCKED (Option A)` — see
+> [release-decision](release/release-decision.md).
+
+Three things must not be confused:
+
+1. **Package readiness (static, IMPLEMENTED at `62a218f`).** Manifests and
+   workflow text are in place and committed. This is proven by inspection,
+   not by a publish run.
+2. **First-OIDC-workflow success (NOT YET OBSERVED — NOT VERIFIED).** No
+   `publish-npmjs` run log exists in the repo at this HEAD, so no package
+   has yet been shown to publish through OIDC trusted publishing.
+3. **Overall swarm readiness (still BLOCKED).** Live inference, live TUI
+   mount, and platform gates remain NOT VERIFIED per the
+   [M8 release qualification](evidence/m8-release-qualification.md) live
+   gates (G9/G10/G11/G12-live). OIDC package readiness changes none of them.
+
+### Version targets at this HEAD (unpublished preparation targets, not releases)
+
+Set by `e162b1d` (`chore(release): bump all publishables to unpublished
+OIDC targets`), locked by `62a218f` (`chore: resync bun.lock to OIDC
+version targets`, 1 file, 9 insertions / 9 deletions — version-number
+alignment only). Observed in each `package.json` at HEAD (read-only
+inspection; manifests not edited by this docs task):
+
+| Package | Version | `publishConfig.registry` |
+|---|---|---|
+| `@vuminkosi/protocol` | 0.1.1 | `https://registry.npmjs.org` |
+| `@vuminkosi/runtime` | 0.1.2 | `https://registry.npmjs.org` |
+| `@vuminkosi/verification` | 0.1.2 | `https://registry.npmjs.org` |
+| `@vuminkosi/adapter-opencode` | 0.0.2 | `https://registry.npmjs.org` |
+| `@vuminkosi/plugin` | 0.0.2 | `https://registry.npmjs.org` |
+| `@vuminkosi/board-terminal` | 0.1.1 | `https://registry.npmjs.org` |
+| `@vuminkosi/git-workspaces` | 0.1.1 | `https://registry.npmjs.org` |
+| `apps/swarmctl` (`@vuminkosi/swarmctl`) | 0.1.0 | none — `private: true`, skipped by the loop |
+
+Commit chain behind this table (all COMMITTED, verified `git show --stat`):
+
+- `5a0bfb8` — `fix(release): default all publish manifests to npmjs.org`
+  (7 manifests switched to the npmjs.org default registry).
+- `e162b1d` — version bumps above (7 files, one version line each).
+- `2edb0a9` — `docs(ci): correct npmjs lane registry comment` (stale-comment
+  fix: the `publish-npmjs.yml` header now reads `publishConfig.registry`
+  as `https://registry.npmjs.org`, matching the manifests; the GitHub
+  Packages lane pins its own `--registry` at `publish.yml:133`, so the two
+  lanes stay independent).
+- `62a218f` — `bun.lock` resync to the same targets (HEAD).
+
+### Trusted-publisher status: UNKNOWN → manual action required per package
+
+Trusted-publisher registration cannot be observed from this repo — it lives
+in per-package Settings on npmjs.com. Status is therefore **UNKNOWN, treated
+as NOT DONE** until a maintainer confirms it. Before the first real publish,
+for **each** of the seven packages above: npmjs.com → package page →
+Settings → Trusted Publisher → Manage Trusted Publishers → add GitHub
+Actions publisher with organization/user `vuminkosi`, repository
+`opencode-agent-swarm`, workflow file name `publish-npmjs.yml` (no
+environment restriction needed). Without a registered publisher, that
+package's publish attempt fails with `ENEEDAUTH` (plus the 2FA-bypass
+notice) or `403` while the other packages still publish; attach the
+publisher and re-run. A package that does not exist yet needs the one-time
+maintainer bootstrap first (`npm login`, `npm publish --registry
+https://registry.npmjs.org` from the package directory, then attach the
+publisher, then re-run the workflow) — see "One-time bootstrap" above.
+
+### What the first publish will prove (and what to check)
+
+When the lane first runs, the verify-evidence pointers in "How to verify"
+above apply unchanged: Actions log `publish <dir>` vs `skip <dir>` lines
+(`apps/swarmctl` must log `skip ... private=true`), the `--provenance`
+attestation step, the `https://registry.npmjs.org` target in the log, and
+`npm view @vuminkosi/protocol version` returning `0.1.1` with no `.npmrc`
+entry. Until that log exists, first-OIDC-workflow success stays
+**NOT YET OBSERVED**. OIDC token minting needs npm ≥ 11.5.1 at publish
+time; the workflow upgrades automatically when older
+(`publish-npmjs.yml` OIDC floor-guard step) — read the workflow directly
+for the exact commands; no flags are invented here.
+
+### Dependency note (S04/S05/S06/S07 + DEP-REAUDIT)
+
+The `62a218f` lockfile resync (9+/9−) aligns `bun.lock` with the OIDC
+version targets above — version-number alignment only, drafted against the
+`2edb0a9` gate evidence. **Lockfile re-audit is PENDING**: no DEP-REAUDIT
+closing evidence exists in the repo at this HEAD (no re-audit log found),
+so dependency closure is NOT claimed here. Resumption: run the re-audit at
+`62a218f` and record the log before any publish claim needs it.
