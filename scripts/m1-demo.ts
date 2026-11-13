@@ -63,6 +63,8 @@ async function run(cmd: string, args: string[], cwd?: string): Promise<{ code: n
 }
 
 const root = mkdtempSync(join(tmpdir(), "m105-demo-"));
+let store: SwarmStore | undefined;
+let tryError: unknown = null;
 try {
   const opencode = await run("opencode", ["--version"]);
   const firstLine = opencode === null ? "" : (opencode.out.split("\n")[0] ?? "");
@@ -81,13 +83,17 @@ try {
   writeFileSync(join(root, "workers", "worker-a", "index.ts"), "export const area = \"worker-a\";\n", "utf8");
   writeFileSync(join(root, "workers", "worker-b", "index.ts"), "export const area = \"worker-b\";\n", "utf8");
 
-  const store = new SwarmStore(join(root, "swarm.db"));
+  store = new SwarmStore(join(root, "swarm.db"));
   const harness = new FakeHarness();
   const service = new SwarmService(store, harness);
   const result = await service.activateSwarm({
     requirement: "M1-05 demo: two independent fixture modules",
     coordinatorSessionId: "sess-lead",
     projectRoot: root,
+    // Explicit test-only ModelRef (FakeHarness queue-only, zero inference).
+    // Required by fail-closed MODEL-INHERIT-01: no model/modelContext would
+    // throw MODEL_UNRESOLVABLE here (see model-inheritance.test.ts).
+    model: { providerID: "prov-demo", id: "model-demo" },
   });
   const snap = service.getStatusSnapshot(result.swarm.id);
   const overlapTrue = executionsOverlap(
@@ -98,7 +104,8 @@ try {
     { startedAt: "2026-01-01T00:00:00.000Z", terminalAt: "2026-01-01T00:00:10.000Z" },
     { startedAt: "2026-01-01T00:00:10.000Z", terminalAt: "2026-01-01T00:00:20.000Z" },
   );
-  store.close();
+  // store remains open until finally: closing there guarantees the SQLite
+  // handle is released before directory removal even on try-block failure.
 
   const rows: Array<[string, string]> = [
     ["opencode version", opencodeVersion],
@@ -122,6 +129,41 @@ try {
   for (const row of rows) {
     console.log("| " + (row[0] ?? "") + " | " + (row[1] ?? "") + " |");
   }
+} catch (err) {
+  // Log the try-block error FIRST so a Windows EBUSY cleanup failure can
+  // never mask the real failure.
+  tryError = err;
+  console.error("[m1-demo] failed: " + (err instanceof Error ? err.message : String(err)));
+  throw err;
 } finally {
-  rmSync(root, { recursive: true, force: true });
+  try {
+    store?.close();
+  } catch (closeErr) {
+    console.error("[m1-demo] store close warning: " + (closeErr instanceof Error ? closeErr.message : String(closeErr)));
+  }
+  // Windows holds SQLite file locks briefly after close: retry removal so
+  // EBUSY/EPERM never masks the try-block result.
+  let removed = false;
+  let lastCleanupErr: unknown = null;
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      rmSync(root, { recursive: true, force: true });
+      removed = true;
+      break;
+    } catch (cleanupErr) {
+      lastCleanupErr = cleanupErr;
+      await Bun.sleep(100 * attempt);
+    }
+  }
+  if (!removed) {
+    console.error(
+      "[m1-demo] cleanup warning: temp root removal failed after retries: " +
+        (lastCleanupErr instanceof Error ? lastCleanupErr.message : String(lastCleanupErr)),
+    );
+    // Never mask a try-block failure with a cleanup failure; only fail on
+    // cleanup when the demo itself succeeded.
+    if (tryError === null) {
+      throw lastCleanupErr;
+    }
+  }
 }
