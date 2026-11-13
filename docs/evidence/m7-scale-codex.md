@@ -77,9 +77,9 @@ Figures below are **supplied M7-CODE handoff evidence** (bench run at the M7-COD
 
 Bench report JSON is written to a fresh `mkdtemp` dir under the OS tmp dir (`<out>/m7-bench-report.json`, default path printed on stdout); intermediate repos/DBs are removed and the report dir is retained. The report path is **disposable, never canonical** — no bench JSON is committed. [DESIGN — code-observed in `scripts/m7-bench.ts`]
 
-## 4. Codex probe (resolve-only, NOT-VERIFIED-stub) [PROBE]
+## 4. Codex probe (resolve-only, REMOVED at 3589e2b — historical record at 9111c4a) [PROBE]
 
-The M7-02 probe resolved what Codex offers **without installing anything and without spending anything** (read-only local resolution + metadata lookup, no network transport, no turn ever submitted). The full probe log lives in [adapter-codex README](../../packages/adapter-codex/README.md); the verdict is: **NOT VERIFIED — no Codex transport implemented**.
+The M7-02 probe resolved what Codex offers **without installing anything and without spending anything** (read-only local resolution + metadata lookup, no network transport, no turn ever submitted). The probe log was recorded in `packages/adapter-codex/README.md` at `9111c4a`; that package (5 files, 320 deletions per `git show --stat HEAD`) was **REMOVED at `3589e2b`** per the architecture decision (OpenCode harness is the execution backend via the `CodingHarness` port; no Codex backend required). The findings below are retained explicitly as **historical rationale recorded at `9111c4a`**, not current implementation. The verdict is: **REMOVED — Codex stub removed; transport NOT VERIFIED and honestly unbuilt (historical fail-closed-stub finding retained below)**.
 
 | Probe | Result (supplied, code-recorded in the stub header + README) |
 |---|---|
@@ -136,7 +136,8 @@ git log --oneline -6
 # 9111c4a (HEAD) / f7237bf / ccf0db6 / 817835a / 55541b0 / 69f40a9 (inspected)
 
 # Supplied (cited, NOT re-executed here — no build/test/bench re-runs in DOC-M7-01):
-# tsc clean x2 + packages/adapter-codex typecheck clean → exit 0
+# HISTORICAL-AT-9111c4a: tsc clean x2 + packages/adapter-codex typecheck clean → exit 0
+# (package removed at 3589e2b; the adapter-codex typecheck command is no longer runnable)
 # focused: 10 (scale.test.ts) + 5 (m7-scale.test.ts) + 9 fail-closed rows +
 #   zero-fake-turn + default-regression (codex-harness.test.ts) = PASS
 # carried: 35 + 4 (M5 rate-limit/quota) + 207 + 74 + 23 + 51 + 34 + 12 prior suites green
@@ -144,11 +145,11 @@ git log --oneline -6
 # live inference / live server / live spend: NOT VERIFIED (no live server, no spend, no credentials)
 ```
 
-Repro commands that WOULD reproduce (labeled supplied/inspected, not executed here): `bun run typecheck` (repo root, × 2 configs per handoff), `bunx tsc --noEmit -p packages/adapter-codex/tsconfig.json` (from repo root), `bun test packages/runtime/src/services/__tests__/scale.test.ts`, `bun test tests/fault-injection/m7-scale.test.ts`, `bun test packages/adapter-codex/src/__tests__/codex-harness.test.ts`, `bun scripts/m7-bench.ts --dry-run` (plan only, zero work) then `bun scripts/m7-bench.ts [--out <dir>]` (full run, report JSON to disposable tmp). Typecheck/test/bench figures above are **committed/supplied evidence with honest scope**: inspected in source and handoff, not freshly executed in this documentation session. To advance the live gate, run the suites and bench on the pinned toolchain, capture the logs, and mount a disposable live probe for the Codex verbs. [PROBE]
+Repro commands that WOULD reproduce at `9111c4a` (labeled supplied/inspected, not executed here; HISTORICAL-AT-9111c4a — the two `packages/adapter-codex/...` commands below are no longer runnable, package removed at `3589e2b`): `bun run typecheck` (repo root, × 2 configs per handoff), `bunx tsc --noEmit -p packages/adapter-codex/tsconfig.json` (from repo root — HISTORICAL, target deleted), `bun test packages/runtime/src/services/__tests__/scale.test.ts`, `bun test tests/fault-injection/m7-scale.test.ts`, `bun test packages/adapter-codex/src/__tests__/codex-harness.test.ts` (HISTORICAL, target deleted), `bun scripts/m7-bench.ts --dry-run` (plan only, zero work) then `bun scripts/m7-bench.ts [--out <dir>]` (full run, report JSON to disposable tmp). Typecheck/test/bench figures above are **committed/supplied evidence with honest scope**: inspected in source and handoff, not freshly executed in this documentation session. To advance the live gate, run the suites and bench on the pinned toolchain, capture the logs, and mount a disposable live probe for the Codex verbs. [PROBE]
 
 ### Link validation (the only check executed in this DOC session) [PROBE]
 
-- Relative links in this file (`../plan/spec.md`, `m6-parity-ux.md`, `../compatibility-report.md`, `../milestone-matrix.md`, `../../packages/adapter-codex/README.md`) validated by read-only path-existence inspection (`Test-Path` over `docs/` and `packages/`); all targets exist — exit 0.
+- Relative links in this file (`../plan/spec.md`, `m6-parity-ux.md`, `../compatibility-report.md`, `../milestone-matrix.md`) validated by read-only path-existence inspection (`Test-Path` over `docs/`); all targets exist — exit 0. (HISTORICAL-AT-9111c4a: this list previously included `../../packages/adapter-codex/README.md`; that target was removed at `3589e2b` and the probe record now lives in §4 of this file — no link in this file points at a deleted path.)
 - No unexecuted command examples are presented as executed; §7 commands are labeled inspected/supplied.
 
 ## 8. Gaps and NOT VERIFIED list [PROBE]
@@ -160,6 +161,7 @@ Repro commands that WOULD reproduce (labeled supplied/inspected, not executed he
 5. No live-server, screenshot, deployment, endpoint, CLI-flag, release-number, or support-promise claims are made in this evidence.
 6. Untracked `NUL` junk file at repo root is uncommitted noise, never evidence, left untouched.
 7. Bench report JSON path is disposable tmp, never canonical — no committed bench artifact is claimed.
+8. Removal note: the 5 `packages/adapter-codex/*` files counted in §1 (320 deletions) were removed at `3589e2b` per the architecture decision (OpenCode harness is the execution backend via the `CodingHarness` port; no Codex backend required). §§1/5/9 counts stay as the historical record of `9111c4a` — history is not rewritten. [PROBE — `git show --stat HEAD`, inspected]
 
 ## 9. Claim-status summary
 
@@ -168,7 +170,7 @@ Repro commands that WOULD reproduce (labeled supplied/inspected, not executed he
 | Scale behaviors: N-worker ownership, dup collapse, quota freeze, restart, read-only zero, secrets zero, replay, contention (§2 rows 1–9) | IMPLEMENTED (code-observed at `9111c4a`, supplied PASS) |
 | Integration safety: conflict reject, winner/dedupe, 4-way disjoint, crash dedupe (§2 rows 10–14) | IMPLEMENTED (code-observed at `9111c4a`, supplied PASS) |
 | Bench figures: scheduler/wake/replay/contention/RSS/integrate (§3) | SUPPLIED PASS (simulation) / hardware dependence + live timing NOT VERIFIED |
-| Codex probe: resolve-only CLI/SDK/verb findings + fail-closed stub (§4) | IMPLEMENTED-stub (code-observed); transport NOT VERIFIED by design |
+| Codex probe: resolve-only CLI/SDK/verb findings + fail-closed stub (§4) | REMOVED at `3589e2b` (historical IMPLEMENTED-stub, code-observed at `9111c4a`); transport NOT VERIFIED by design, findings retained as historical rationale |
 | 10 + 5 + 9 rows + zero-fake-turn + default-regression; carried 35 + 4 + priors; `tsc × 2` + adapter typecheck | SUPPLIED PASS / NOT VERIFIED (fresh run) — cited, see §7 |
 | Commit `9111c4a` (8 files, 1859+/0−) | COMMITTED (HEAD, §1) |
 | M7-01/02 reviews COMMIT-ready; S2 accepted hardening follow-ups, non-blocking | Cited supplied review disposition (see §6) |
