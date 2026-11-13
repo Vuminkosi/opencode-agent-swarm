@@ -12,8 +12,95 @@ whose durability layer is a SQLite journal in WAL mode (`packages/runtime/src/db
 migrations + atomic store). Sources: [spec](docs/plan/spec.md) §3,
 `packages/plugin/src/index.ts`, `packages/runtime/src/db/store.ts`.
 
-> Source baseline: canonical tree at `HEAD 8ccb19e` on `master`. Commit evidence is not
+> Source baseline: canonical tree at `HEAD a70448e` on `master`. Commit evidence is not
 > release evidence — verification does not prove commit, commit does not prove release.
+
+## 0. Getting Started — the 1-2-3 path
+
+Follow these three steps in order. Every command below exists verbatim in this
+repo (root `package.json`, `.github/workflows/publish.yml`,
+`packages/plugin/src/commands/swarm.ts`, or `packages/plugin/src/rpc.ts`);
+anything not executed live here is marked **NOT VERIFIED** rather than invented.
+
+### Step 1 — Install the pinned toolchain and the published packages
+
+1. Confirm the pinned toolchain first — same pins as the table in
+   [§1 Quickstart](#1-quickstart): Bun `1.4.4`, Node `24`, TypeScript `5.9.2`,
+   `@opencode/plugin` `2.2.7`. Windows PowerShell is assumed throughout.
+2. To consume the published packages (scope `@vuminkosi`, registry
+   `https://npm.pkg.github.com`, published by the `publish` workflow per
+   [docs/publishing.md](docs/publishing.md)), point the scope at the registry
+   with an `.npmrc` entry — exactly this line, nothing else:
+
+   ```ini
+   @vuminkosi:registry=https://npm.pkg.github.com
+   ```
+
+   Registry reads require authentication: use a GitHub token with
+   `read:packages`. Do NOT paste any real token into docs, code, logs, or
+   reports. Whether a given version is currently published is **NOT VERIFIED**
+   here — releases are cut via GitHub Release `published` or manual dispatch
+   per [docs/publishing.md](docs/publishing.md).
+3. From a clone of this repo, install the locked workspaces (the same command
+   CI runs in `.github/workflows/publish.yml`):
+
+   ```powershell
+   bun install --frozen-lockfile
+   ```
+
+   Expected: exit 0 with the `packages/*` workspaces installed exactly as
+   locked. First-run output on your machine is **NOT VERIFIED** in this
+   document — run it yourself and keep the log.
+
+### Step 2 — Run your first `/swarm` command
+
+1. Type `/swarm help` in your OpenCode session. It prints the whole command
+   family (`SWARM_HELP` in `packages/plugin/src/commands/swarm.ts`) — the
+   same eight rows as the table in [§1 Quickstart](#1-quickstart). Exact
+   rendered text is **NOT VERIFIED** live here.
+2. Start real work with a requirement (this binds your current session as
+   coordinator and starts two named workers):
+
+   ```text
+   /swarm Add tests to two independent fixture modules
+   ```
+
+   Expected result shape (per the `activated` result in
+   `packages/plugin/src/commands/swarm.ts`): a swarm id, a title, and the two
+   worker names. Exact live text is **NOT VERIFIED** — no live daemon run was
+   executed for this document. Bare `/swarm` with nothing after it is a usage
+   error, and matching is case-insensitive (`/swarm STATUS` works).
+
+### Step 3 — Read the terminal board and get help
+
+1. Check state without spending any model calls:
+
+   ```text
+   /swarm status swarm-9
+   /swarm board swarm-9
+   /swarm agents swarm-9
+   ```
+
+   (Replace `swarm-9` with your swarm id; the id may be omitted when a swarm
+   is already active in the session.)
+2. If the native board route is unavailable, use the documented terminal
+   fallback — copy the exact string from `/swarm board` output rather than
+   retyping it (`TERMINAL_BOARD_FALLBACK` in `packages/plugin/src/rpc.ts`):
+
+   ```powershell
+   bunx opencode-swarm board --swarm <id>
+   ```
+
+   Board reads are zero-inference and read-only by construction: posts in
+   sequence order with an unread divider, roster, delivery/wake status, tasks
+   with verification lines, and recorded-only usage. First-run output of this
+   exact string on your machine is **NOT VERIFIED** — if it does not resolve,
+   follow [docs/user-guide-swarm.md](docs/user-guide-swarm.md) §3 and
+   [docs/troubleshooting.md](docs/troubleshooting.md).
+3. Get help: `/swarm help` for the command family,
+   [user guide](docs/user-guide-swarm.md) for workflows,
+   [troubleshooting](docs/troubleshooting.md) and the
+   [recovery runbook](docs/recovery-runbook.md) when stuck.
 
 ## 1. Quickstart
 
@@ -104,6 +191,45 @@ roster, delivery/wake status, tasks and verification lines. Daemon config
 > document, so first-run behavior of that exact string on your machine is **NOT VERIFIED** —
 > if it does not resolve, follow [docs/user-guide-swarm.md](docs/user-guide-swarm.md) §3
 > and [docs/troubleshooting.md](docs/troubleshooting.md).
+
+### How a swarm run works
+
+```mermaid
+flowchart TB
+    Dev["Developer"]
+    Cmd["Swarm command in plugin"]
+    Coord["Coordinator daemon with plan and briefs"]
+    Journal["SQLite journal and board"]
+    Workers["Named workers in native sessions"]
+    Wake["Wake queue with at-mention delivery"]
+    Verify["Verifier with tests and evidence gate"]
+    Gate["Serialized integration gate"]
+    Done["Done"]
+
+    Dev --> Cmd
+    Cmd --> Coord
+    Coord --> Journal
+    Journal --> Workers
+    Workers --> Journal
+    Journal --> Wake
+    Wake -->|"at-mention wake"| Workers
+    Journal --> Verify
+    Verify -->|"fail loops back"| Workers
+    Verify --> Gate
+    Gate --> Done
+```
+
+Node-to-code map: `Swarm command in plugin` is `parseSwarmInput` plus
+`SwarmCommand.execute` in `packages/plugin/src/commands/swarm.ts`;
+`Coordinator daemon with plan and briefs` is the coordinator binding plus the
+daemon `SwarmService`; `SQLite journal and board` is the WAL-mode journal in
+`packages/runtime/src/db/` rendered by `packages/board-terminal/src/board.ts`;
+`Named workers in native sessions` are independent native OpenCode sessions;
+`Wake queue with at-mention delivery` is the daemon wake dispatcher;
+`Verifier with tests and evidence gate` is `packages/verification/` plus the
+verifier role, whose fail outcome loops back to workers; `Serialized
+integration gate` is the one-winner serialized integrate with loser-worktree
+preservation per [m7-scale-codex](docs/evidence/m7-scale-codex.md) §2.
 
 ### Published packages
 
