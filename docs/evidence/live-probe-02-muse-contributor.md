@@ -205,3 +205,52 @@ To resume after top-up (orchestrator-owned; not executed here):
 **NUL note:** untracked `NUL` exists in the working tree; it is uncommitted junk, was not touched by this task, and forms no part of this evidence (NOT VERIFIED / out of scope). [PROBE — `git status --porcelain`]
 
 **Link check (touched-file scope):** this file contains no relative or external links — nothing to resolve; check passes vacuously. Matrix file untouched (see handoff), so no matrix link check was in scope. [PROBE]
+
+---
+
+## 14. E final disposition — turn-uniqueness PASS (live) vs SSE-terminal-count BLOCKED (product behavior) [PROBE] [SUPPLIED]
+
+- **Task / Document ID:** DOC-E-RES-01 (append-only; §§1–13 preserved, not rewritten). [PROBE]
+- **Source baseline / HEAD observed:** canonical repo `C:\DevOps\opencode-agent-swarm`, HEAD `6312eed` [OBSERVED — `git rev-parse HEAD` → `6312eedde567f71b7cdd90a9658a5aa68cd278bc`]. Working tree at write time: `git status --porcelain` → empty/clean apart from this file's own dirty (unstaged) modification. [OBSERVED — `git status --porcelain`]
+- **Dependencies (only):** EXEC-13, EXEC-16, EXEC-20/21, DEBUG-SSE-01/02, commit `ebd5e46` (already in file §13). No other runs claimed. [OBSERVED — file §13]
+
+**(a) E-via-turn-uniqueness: PASS (live).**
+
+- EXEC-13: 3/3 relevant checks (dedupe, unrelated silence, identity) — PASS. [SUPPLIED — per task context, not in-file]
+- EXEC-20: 12/13 proofs PASS. [OBSERVED — file §§10/13]
+- B overlap PASS: 22963→20263 ms. [OBSERVED — file §13]
+- C/D wake chain 8/8 PASS, waiting→mention→wake→successful turn→waiting, plus 5/5 chain. [OBSERVED — file §13]
+- duplicate→zero new turns / 0 turns duplicated. [OBSERVED — file §13]
+- unrelated→zero. [OBSERVED — file §§10/13]
+- Spend $0.00. [OBSERVED — file §§10/13]
+- Zero retries on HTTP 402 path. [OBSERVED — file §§10–12]
+- No 401/403/429 on the wake path. [SUPPLIED — per task context]
+- **E-via-turn-uniqueness verdict: PASS (live).** [PROBE] [SUPPLIED]
+
+**(b) E-via-SSE-terminal-outcome-count: BLOCKED (not failed) — definitive product-behavior finding.**
+
+- Disposable opencode v2.2.7 emits zero session-scoped SSE frames across all live runs — only `server.connected` + keepalives/SSE comments + untyped data lines. [OBSERVED — file §13]
+- Confirmed by raw byte capture EXEC-16. [SUPPLIED]
+- Confirmed post-parser-fix by EXEC-20/21. [OBSERVED — file §13]
+- Parser allowlist exonerated: `succeeded`/`failed` ARE subscribed + expected terminal kinds. [OBSERVED — file §13]
+- Harness now fails loudly via `SSE_ZERO_FRAMES` (committed) instead of silently. [SUPPLIED — per task context; marked as such, no commit SHA invented]
+- **E-via-SSE verdict: BLOCKED by product behavior, not a harness defect; never presented as failed.** [PROBE] [DESIGN]
+
+**(c) What would unblock E-via-SSE. [DESIGN]**
+
+- (i) A server build that emits `session.execution.succeeded`/`failed` (or equivalent session-scoped terminal envelopes) on the event stream; or
+- (ii) an authorized contract change to count terminal outcomes from the wait()/session-snapshot receipt path instead of the SSE stream.
+- No code change is made or proposed here. [DESIGN]
+
+**(d) Live re-proof policy. [DESIGN]**
+
+- NO further live runs scheduled — do not repeat unchanged attempts; rerun only if (a) provider quota is confirmed restored AND (b) the server emits session frames (confirmed via probe raw capture during a turn). [DESIGN]
+- Release remains **RELEASE_CANDIDATE_BLOCKED (unchanged)**; no release decision is altered here. [DESIGN]
+
+**Ancillary notes.**
+
+- Overall E is NOT claimed PASS: E-via-turn-uniqueness PASS (live) and E-via-SSE BLOCKED (product behavior) stand as separate sub-claims. No SSE frames claimed observed; no TUI mount claimed; no parity PASS claimed. [PROBE]
+- No invented spend/token/turn counts beyond those listed above; no EXEC IDs cited beyond EXEC-13/16/20/21 + DEBUG-SSE-01/02; no commit SHAs beyond `6312eed` (baseline) and `ebd5e46` (already in file). [PROBE]
+- No secrets, `.env` contents, tokens, or keys appear in this section. [PROBE]
+- **Link check (touched-file scope):** no new links added in §14; file still contains no relative or external links — nothing to resolve; check passes vacuously. [PROBE]
+- **Git operations performed:** NONE (no stage, no commit, no branch, no push, no merge/rebase/reset/clean). This file is left **dirty (unstaged, uncommitted)** per instructions. [PROBE]
