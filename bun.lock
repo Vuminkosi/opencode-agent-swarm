@@ -10,11 +10,11 @@
     },
     "packages/adapter-opencode": {
       "name": "@vuminkosi/adapter-opencode",
-      "version": "0.0.1",
+      "version": "0.0.2",
     },
     "packages/board-terminal": {
       "name": "@vuminkosi/board-terminal",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "devDependencies": {
         "@types/node": "22.10.2",
         "bun-types": "1.4.4",
@@ -23,7 +23,7 @@
     },
     "packages/git-workspaces": {
       "name": "@vuminkosi/git-workspaces",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "devDependencies": {
         "@types/node": "22.10.2",
         "bun-types": "1.4.4",
@@ -31,14 +31,14 @@
     },
     "packages/plugin": {
       "name": "@vuminkosi/plugin",
-      "version": "0.0.1",
+      "version": "0.0.2",
       "dependencies": {
         "@opencode/plugin": "2.2.7",
       },
     },
     "packages/protocol": {
       "name": "@vuminkosi/protocol",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "zod": "3.23.8",
       },
@@ -48,9 +48,9 @@
     },
     "packages/runtime": {
       "name": "@vuminkosi/runtime",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "dependencies": {
-        "@vuminkosi/protocol": "workspace:*",
+        "@vuminkosi/protocol": "^0.1.0",
         "zod": "3.23.8",
       },
       "devDependencies": {
@@ -60,9 +60,9 @@
     },
     "packages/verification": {
       "name": "@vuminkosi/verification",
-      "version": "0.1.0",
+      "version": "0.1.2",
       "dependencies": {
-        "@vuminkosi/protocol": "workspace:*",
+        "@vuminkosi/protocol": "^0.1.0",
       },
       "devDependencies": {
         "@types/node": "22.10.2",
