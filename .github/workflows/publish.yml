@@ -130,6 +130,6 @@ jobs:
               continue
             fi
             echo "publish $PKG"
-            (cd "$PKG" && npm publish --provenance) || fail=1
+            (cd "$PKG" && npm publish --provenance --registry https://npm.pkg.github.com) || fail=1
           done
           exit $fail
