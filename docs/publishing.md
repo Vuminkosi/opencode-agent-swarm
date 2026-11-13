@@ -105,7 +105,17 @@ npmjs.com if needed). Scope availability was checked unauthenticated via
 publish: if `npm view` returns a version instead of 404, STOP — the scope is
 taken and nothing may publish under it.
 
-### Trusted publisher setup (one time per package)
+### Trusted publisher setup (one time per package — REQUIRED BEFORE the workflow can succeed)
+
+> Ordering prerequisite: the trusted publisher MUST be registered on
+> npmjs.com for EACH package BEFORE the `publish-npmjs` workflow can
+> succeed for that package. Without a registered publisher npm never
+> receives an OIDC credential and every publish attempt for that package
+> fails with `ENEEDAUTH` (`need auth — run npm adduser`, plus the
+> "2FA-bypass" notice) or `403`; packages that do have a publisher still
+> publish in the same run. Register first, then run the workflow — not
+> the reverse (for packages that do not exist yet, bootstrap below,
+> attach the publisher, then re-run the workflow).
 
 This lane authenticates with npm **trusted publishing (OIDC)** — the
 publish job's `id-token: write` permission is the sole credential and the

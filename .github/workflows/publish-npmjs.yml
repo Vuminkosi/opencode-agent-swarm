@@ -65,6 +65,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 24
+          registry-url: https://registry.npmjs.org
 
       - name: Install (frozen lockfile)
         run: bun install --frozen-lockfile
@@ -112,14 +113,25 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 24
-          # No registry-url: that input would write an `_authToken` line into
-          # the npm config. This lane authenticates via OIDC trusted
-          # publishing instead; the publish command's --registry flag below
+          # registry-url is the official trusted-publishing pattern: it
+          # configures npm for the npmjs.org registry so the OIDC token
+          # exchange engages at publish time. It writes NO `_authToken`
+          # line and needs NO token env var or Actions secret — auth
+          # comes solely from the publish job's `id-token: write`
+          # permission. The publish command's --registry flag below still
           # targets npmjs.org and overrides each package.json
           # publishConfig.registry (GPR).
+          registry-url: https://registry.npmjs.org
 
       - name: Install (frozen lockfile)
         run: bun install --frozen-lockfile
+
+      # OIDC minting requires npm >= 11.5.1; upgrade to latest when older.
+      - name: Ensure npm supports trusted publishing (OIDC >= 11.5.1)
+        run: |
+          npm --version
+          node -e "const v=require('node:child_process').execSync('npm --version').toString().trim().split('.').map(Number);const ok=(v[0]>11||(v[0]===11&&v[1]>5)||(v[0]===11&&v[1]===5&&v[2]>=1));if(!ok){console.error('npm '+v.join('.')+' < 11.5.1 — upgrading to npm@latest for OIDC support');process.exit(1)}else{console.log('npm '+v.join('.')+' supports OIDC trusted publishing')}" || npm install -g npm@latest
+          npm --version
 
       # Publishes each workspace package whose package.json is NOT private.
       # Any package marked private is SKIPPED with a logged reason.
