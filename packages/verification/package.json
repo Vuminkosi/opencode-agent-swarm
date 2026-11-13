@@ -1,6 +1,6 @@
 {
   "name": "@vuminkosi/verification",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publishConfig": {
     "access": "public",
     "registry": "https://npm.pkg.github.com",
@@ -13,7 +13,7 @@
     ".": "./src/test-runner.ts"
   },
   "dependencies": {
-    "@vuminkosi/protocol": "workspace:*"
+    "@vuminkosi/protocol": "^0.1.0"
   },
   "devDependencies": {
     "@types/node": "22.10.2",
