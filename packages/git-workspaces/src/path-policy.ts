@@ -26,6 +26,32 @@
  *   (worktree-manager refreshes before destructive ops).
  * - Remote UNC targets are compared lexically; the local host cannot
  *   canonicalize a remote server's reparse points.
+ *
+ * UNC / DEVICE-NAMESPACE LIMITS (M8-S3 follow-up note — behavior unchanged,
+ * fail-closed throughout):
+ * - `\\?\` (extended-length) and `\\.\` (device) spellings are unified to
+ *   the SAME drive/UNC comparison form as plain paths before any check, so
+ *   a prefixed spelling can neither bypass confinement nor dodge canonical
+ *   denial. Verified: `\\?\C:\root\sub` == `C:\root\sub`,
+ *   `\\?\UNC\srv\share\dir` == `\\srv\share\dir`.
+ * - Namespaces with no lexical drive mapping fail closed (INVALID_PATH,
+ *   never allow): bare `\\?\`, volume-GUID (`\\?\Volume{…}\…`),
+ *   `\\?\GLOBALROOT\…`, `\\.\COM1`, `\\.\PhysicalDrive0`, NT
+ *   object-manager paths (`\Device\…`, `\??\…`).
+ * - Reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`,
+ *   any case, with extension/trailing dots-spaces) are rejected in EVERY
+ *   path component — including UNC subdirectories (`\\srv\share\COM1\x`)
+ *   and inside prefixed spellings (`\\?\C:\root\CON`). Device names as a
+ *   UNC *server/share* (`\\CON\share`) are NOT special-cased: remote UNC
+ *   roots compare lexically (see above), and confinement still applies.
+ * - Embedded NUL bytes are rejected BEFORE any comparison or filesystem
+ *   use, in every entry point — including inside `\\?\`-prefixed
+ *   spellings. A NUL can therefore never smuggle a second path past a
+ *   lexical check.
+ * - A share-less `\\?\UNC\srv` spelling degrades to the same root-relative
+ *   form as the bare `\srv` spelling (no new alias: identical output for
+ *   identical namespaces); callers still confine it via resolveWithinRoot,
+ *   which rejects it outside the root.
  */
 
 import { existsSync, realpathSync } from "node:fs";

@@ -591,11 +591,12 @@ export class BlockRegistry {
  * (`402`, `401`, `QUOTA_EXHAUSTED`, …) — never bodies, prompts, or
  * credentials. Values outside the code shape, or values carrying
  * secret-looking prefixes (Slack `xox*` tokens, AWS `ASIA`/`AKIA` keys,
- * `ghp_`/`gho_` tokens, `sk-` keys, `Bearer` material), are rejected
- * (fail closed) so secrets can never be persisted as block metadata.
+ * GitHub `ghp_`/`gho_`/`gh_sk` tokens, `sk-` keys, `Bearer` material), are
+ * rejected (fail closed) so secrets can never be persisted as block
+ * metadata.
  */
 const REASON_CODE_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/;
-const SECRET_PREFIX_PATTERN = /^(xox|ASIA|AKIA|ghp_|gho_|sk-|Bearer\s)/i;
+const SECRET_PREFIX_PATTERN = /^(xox|ASIA|AKIA|ghp_|gho_|gh_sk|sk-|Bearer\s)/i;
 
 function checkReasonCode(kind: BlockKind, reasonCode: string): void {
   if (!REASON_CODE_PATTERN.test(reasonCode) || SECRET_PREFIX_PATTERN.test(reasonCode)) {

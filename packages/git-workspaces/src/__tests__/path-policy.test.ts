@@ -472,3 +472,28 @@ describe("M8 COMPAT F-02 — device names and NUL bytes", () => {
     }
   });
 });
+
+describe("M8-S3 UNC/device-namespace negative rows (uncovered variants, fail-closed)", () => {
+  test("bare extended-length prefix is unmappable (INVALID_PATH)", () => {
+    expect(() => normalizeForCompare("\\\\?\\")).toThrow();
+  });
+
+  test("forward-slash device-namespace spelling fails closed", () => {
+    expect(() => normalizeForCompare("//./COM1")).toThrow();
+    expect(() => normalizeForCompare("//?/Volume{abc}/x")).toThrow();
+  });
+
+  test("NUL inside a \\\\-prefixed spelling rejected before comparison", () => {
+    expect(() => normalizeForCompare("\\\\?\\C:\\root\\a\0b")).toThrow();
+    expect(() => resolveWithinRoot("C:\\root", "\\\\?\\C:\\root\\a\0b")).toThrow();
+  });
+
+  test("device name as a UNC subdirectory rejected (fail-closed)", () => {
+    expect(() => normalizeForCompare("\\\\server\\share\\COM1\\x")).toThrow();
+    expect(() => normalizeForCompare("\\\\server\\share\\sub\\NUL.txt")).toThrow();
+  });
+
+  test("device name inside a prefixed candidate rejected at resolve time", () => {
+    expect(() => resolveWithinRoot("C:\\root", "\\\\?\\C:\\root\\CON")).toThrow();
+  });
+});

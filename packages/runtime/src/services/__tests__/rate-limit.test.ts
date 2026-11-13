@@ -402,6 +402,37 @@ describe("rate limiter S3 hardening: backoff sanitize, reasonCode allowlist, aut
     expect(registry.isBlocked("m-s")).toBe(false);
   });
 
+  test("reasonCode allowlist: no secret-shaped value persists, ever (M8-S3)", () => {
+    const registry = new BlockRegistry();
+    const at = new Date("2026-11-11T00:00:00.000Z").toISOString();
+    // Synthetic canary markers only — every provider secret family the
+    // deny-list names must fail closed, and the member must stay unblocked
+    // (rejection leaves zero persisted trace of the attempt).
+    const secretShaped = [
+      "AKIAIOSFODNN7EXAMPLE",
+      "asia-fake-marker-1",
+      "xoxp-fake-marker-1",
+      "ghp_fakemarker000000000000000000000001",
+      "gho_fakemarker000000000000000000000001",
+      "gh_sk-fakemarker-1",
+      "sk-fakemarker-1",
+      "Bearer fakemarker1",
+      "402; DROP TABLE x",
+      "ok".padEnd(65, "x"), // overlong: outside the 64-char code shape
+      "",
+    ];
+    for (const bad of secretShaped) {
+      expect(() => registry.markAuthBlocked("m-secret", bad, at)).toThrow();
+      expect(() => registry.markQuotaPaused("m-secret", bad, at)).toThrow();
+    }
+    expect(registry.isBlocked("m-secret")).toBe(false);
+    expect(registry.get("m-secret")).toBeNull();
+    // Benign redacted codes still record on both paths.
+    expect(registry.markQuotaPaused("m-ok-q", "402", at).reasonCode).toBe("402");
+    expect(registry.markAuthBlocked("m-ok-a", "401", at).reasonCode).toBe("401");
+    expect(registry.markAuthBlocked("m-ok-a2", "QUOTA_EXHAUSTED", at).reasonCode).toBe("QUOTA_EXHAUSTED");
+  });
+
   test("auth resume split: traffic triggers cannot clear auth blocks", () => {
     const registry = new BlockRegistry();
     const at = new Date("2026-11-11T00:00:00.000Z").toISOString();
