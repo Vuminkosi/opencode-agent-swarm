@@ -17,8 +17,8 @@
  *   board-free: the steering text travels only in the wake payload.
  */
 
-import type { Member, WakeIntent } from "@opencode-swarm/protocol";
-import { ProtocolError } from "@opencode-swarm/protocol";
+import type { Member, WakeIntent } from "@vuminkosi/protocol";
+import { ProtocolError } from "@vuminkosi/protocol";
 import type { SwarmStore } from "../db/store.js";
 import { WakeQueue } from "./wake-queue.js";
 import { WakeDispatcher } from "./wake-dispatcher.js";

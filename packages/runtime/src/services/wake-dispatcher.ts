@@ -23,8 +23,8 @@
  * FakeHarness counter stays 0). Status reads never dispatch.
  */
 
-import { ProtocolError } from "@opencode-swarm/protocol";
-import type { Member, WakeIntent, WakeReason } from "@opencode-swarm/protocol";
+import { ProtocolError } from "@vuminkosi/protocol";
+import type { Member, WakeIntent, WakeReason } from "@vuminkosi/protocol";
 import type { LedgerOutcome } from "./usage-ledger.js";
 import type { UsageLedger } from "./usage-ledger.js";
 import {

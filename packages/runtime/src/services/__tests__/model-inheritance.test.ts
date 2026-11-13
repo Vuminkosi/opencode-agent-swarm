@@ -9,7 +9,7 @@
  * (test 5/7) would fail if it did.
  */
 import { describe, test, expect, afterEach } from "bun:test";
-import { ProtocolError } from "@opencode-swarm/protocol";
+import { ProtocolError } from "@vuminkosi/protocol";
 import { SwarmStore } from "../../db/store.js";
 import { SwarmService, type ActivationHarness } from "../swarm-service.js";
 import {

@@ -14,7 +14,7 @@
  * - Zero model inference; the wake dispatch itself stays in the M2 lane.
  */
 
-import type { RecordEvidenceInput, Task } from "@opencode-swarm/protocol";
+import type { RecordEvidenceInput, Task } from "@vuminkosi/protocol";
 import type { SwarmStore } from "../db/store.js";
 
 export interface EvidenceReport {

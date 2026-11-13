@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SwarmStore } from "../../db/store.js";
-import { ProtocolError } from "@opencode-swarm/protocol";
+import { ProtocolError } from "@vuminkosi/protocol";
 import { WakeQueue } from "../wake-queue.js";
 import { WakeDispatcher, type DispatchHarness } from "../wake-dispatcher.js";
 import { InboxReconciler } from "../inbox-reconciler.js";

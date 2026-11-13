@@ -8,7 +8,7 @@
  * never lose a committed post (spec §12: replay from our board sequences,
  * not volatile stream offsets).
  */
-import type { BoardPost } from "@opencode-swarm/protocol";
+import type { BoardPost } from "@vuminkosi/protocol";
 
 export type PostListener = (post: BoardPost) => void;
 

@@ -13,8 +13,8 @@
  * - Zero model inference; zero harness submits.
  */
 
-import { depsSatisfied, type CreateTaskInput, type Task } from "@opencode-swarm/protocol";
-import { ProtocolError } from "@opencode-swarm/protocol";
+import { depsSatisfied, type CreateTaskInput, type Task } from "@vuminkosi/protocol";
+import { ProtocolError } from "@vuminkosi/protocol";
 import type { SwarmStore } from "../db/store.js";
 
 export interface LeaseResult {

@@ -11,7 +11,7 @@
  */
 
 import type { SwarmStore } from "../db/store.js";
-import type { WakeIntent, WakeReason } from "@opencode-swarm/protocol";
+import type { WakeIntent, WakeReason } from "@vuminkosi/protocol";
 import { newCorrelationId, type WakeEventEmitter } from "./wake-events.js";
 
 export interface EnqueueWakeInput {

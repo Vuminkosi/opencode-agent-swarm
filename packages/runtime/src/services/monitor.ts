@@ -18,8 +18,8 @@
  * - Zero model inference; dispatch of the intervention wake stays in the M2 lane.
  */
 
-import { ProtocolError } from "@opencode-swarm/protocol";
-import type { BoardPost, WakeIntent } from "@opencode-swarm/protocol";
+import { ProtocolError } from "@vuminkosi/protocol";
+import type { BoardPost, WakeIntent } from "@vuminkosi/protocol";
 import type { SwarmStore } from "../db/store.js";
 import { WakeQueue } from "./wake-queue.js";
 

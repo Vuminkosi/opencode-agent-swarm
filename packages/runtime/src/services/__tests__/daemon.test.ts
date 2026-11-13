@@ -16,7 +16,7 @@ import { SwarmStore } from "../../db/store.js";
 import { BroadcastHub } from "../broadcast.js";
 import { EventIngest } from "../ingest.js";
 import { SwarmLifecycle } from "../lifecycle.js";
-import type { BoardPost } from "@opencode-swarm/protocol";
+import type { BoardPost } from "@vuminkosi/protocol";
 
 const TOKEN = "m1-02-test-bearer-token-0123456789";
 

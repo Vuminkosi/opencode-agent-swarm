@@ -34,7 +34,7 @@
  *   amendment.
  */
 
-import { ProtocolError } from "@opencode-swarm/protocol";
+import { ProtocolError } from "@vuminkosi/protocol";
 import type {
   BoardPost,
   Member,
@@ -42,7 +42,7 @@ import type {
   ModelRef,
   Swarm,
   Task,
-} from "@opencode-swarm/protocol";
+} from "@vuminkosi/protocol";
 import { SwarmStore } from "../db/store.js";
 import {
   ModelResolutionError,

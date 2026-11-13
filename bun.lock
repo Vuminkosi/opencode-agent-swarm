@@ -9,11 +9,11 @@
       },
     },
     "packages/adapter-opencode": {
-      "name": "@opencode-swarm/adapter-opencode",
+      "name": "@vuminkosi/adapter-opencode",
       "version": "0.0.1",
     },
     "packages/board-terminal": {
-      "name": "@opencode-swarm/board-terminal",
+      "name": "@vuminkosi/board-terminal",
       "version": "0.1.0",
       "devDependencies": {
         "@types/node": "22.10.2",
@@ -22,7 +22,7 @@
       },
     },
     "packages/git-workspaces": {
-      "name": "@opencode-swarm/git-workspaces",
+      "name": "@vuminkosi/git-workspaces",
       "version": "0.1.0",
       "devDependencies": {
         "@types/node": "22.10.2",
@@ -30,14 +30,14 @@
       },
     },
     "packages/plugin": {
-      "name": "@opencode-swarm/plugin",
+      "name": "@vuminkosi/plugin",
       "version": "0.0.1",
       "dependencies": {
         "@opencode/plugin": "2.2.7",
       },
     },
     "packages/protocol": {
-      "name": "@opencode-swarm/protocol",
+      "name": "@vuminkosi/protocol",
       "version": "0.1.0",
       "dependencies": {
         "zod": "3.23.8",
@@ -47,10 +47,10 @@
       },
     },
     "packages/runtime": {
-      "name": "@opencode-swarm/runtime",
+      "name": "@vuminkosi/runtime",
       "version": "0.1.0",
       "dependencies": {
-        "@opencode-swarm/protocol": "workspace:*",
+        "@vuminkosi/protocol": "workspace:*",
         "zod": "3.23.8",
       },
       "devDependencies": {
@@ -59,10 +59,10 @@
       },
     },
     "packages/verification": {
-      "name": "@opencode-swarm/verification",
+      "name": "@vuminkosi/verification",
       "version": "0.1.0",
       "dependencies": {
-        "@opencode-swarm/protocol": "workspace:*",
+        "@vuminkosi/protocol": "workspace:*",
       },
       "devDependencies": {
         "@types/node": "22.10.2",
@@ -165,20 +165,6 @@
 
     "@npmcli/run-script": ["@npmcli/run-script@10.0.4", "", { "dependencies": { "@npmcli/node-gyp": "^5.0.0", "@npmcli/package-json": "^7.0.0", "@npmcli/promise-spawn": "^9.0.0", "node-gyp": "^12.1.0", "proc-log": "^6.0.0" } }, "sha512-mGUWr1uMnf0le2TwfOZY4SFxZGXGfm4Jtay/nwAa2FLNAKXUoUwaGwBMNH36UHPtinWfTSJ3nqFQr0091CxVGg=="],
 
-    "@opencode-swarm/adapter-opencode": ["@opencode-swarm/adapter-opencode@workspace:packages/adapter-opencode"],
-
-    "@opencode-swarm/board-terminal": ["@opencode-swarm/board-terminal@workspace:packages/board-terminal"],
-
-    "@opencode-swarm/git-workspaces": ["@opencode-swarm/git-workspaces@workspace:packages/git-workspaces"],
-
-    "@opencode-swarm/plugin": ["@opencode-swarm/plugin@workspace:packages/plugin"],
-
-    "@opencode-swarm/protocol": ["@opencode-swarm/protocol@workspace:packages/protocol"],
-
-    "@opencode-swarm/runtime": ["@opencode-swarm/runtime@workspace:packages/runtime"],
-
-    "@opencode-swarm/verification": ["@opencode-swarm/verification@workspace:packages/verification"],
-
     "@opencode/ai": ["@opencode/ai@2.2.7", "", { "dependencies": { "@aws-sdk/credential-providers": "3.1057.0", "@opencode/schema": "2.2.7", "@smithy/eventstream-codec": "4.2.14", "@smithy/util-utf8": "4.2.2", "aws4fetch": "1.0.20", "effect": "4.1.0", "google-auth-library": "10.5.0" } }, "sha512-okBbQ0w661Y3fCdlHJUQdolJxGU8mts4W7JrmMrm1kuVEa8FideUm0R4jWenN1NqDLnNHLwmWtxMKHMRVG7wNg=="],
 
     "@opencode/client": ["@opencode/client@2.2.7", "", { "dependencies": { "@opencode/protocol": "2.2.7", "@opencode/schema": "2.2.7" }, "peerDependencies": { "effect": "4.1.0", "solid-js": ">=1.9.0" }, "optionalPeers": ["effect", "solid-js"] }, "sha512-L1nqJqEBEHyg+OwJaMYA5jX8OA4nZ1Jxehp8xTw5u4kzKEgqLes2re7yWzXJSZmybZ5Kv4rX24gJjYHeegwf7g=="],
@@ -272,6 +258,20 @@
     "@types/node": ["@types/node@22.10.2", "", { "dependencies": { "undici-types": "~6.20.0" } }, "sha512-Xxr6BBRCAOQixvonOye19wnzyDiUtTeqldOOmj3CkeblonbccA12PFwlufvRdrpjXxqnmUaeiU5EOA+7s5diUQ=="],
 
     "@types/ws": ["@types/ws@8.18.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w=="],
+
+    "@vuminkosi/adapter-opencode": ["@vuminkosi/adapter-opencode@workspace:packages/adapter-opencode"],
+
+    "@vuminkosi/board-terminal": ["@vuminkosi/board-terminal@workspace:packages/board-terminal"],
+
+    "@vuminkosi/git-workspaces": ["@vuminkosi/git-workspaces@workspace:packages/git-workspaces"],
+
+    "@vuminkosi/plugin": ["@vuminkosi/plugin@workspace:packages/plugin"],
+
+    "@vuminkosi/protocol": ["@vuminkosi/protocol@workspace:packages/protocol"],
+
+    "@vuminkosi/runtime": ["@vuminkosi/runtime@workspace:packages/runtime"],
+
+    "@vuminkosi/verification": ["@vuminkosi/verification@workspace:packages/verification"],
 
     "abbrev": ["abbrev@4.0.0", "", {}, "sha512-a1wflyaL0tHtJSmLSOVybYhy22vRih4eduhhrkcjgrWGnRfrZtovJ2FRjxuTtkkj47O/baf0R86QU5OuYpz8fA=="],
 

@@ -34,7 +34,7 @@ import {
   type BoardPost,
   type CreateSwarmInput,
   type CreateTaskInput,
-} from "@opencode-swarm/protocol";
+} from "@vuminkosi/protocol";
 import { z } from "zod";
 import { PROTOCOL_VERSION, isLoopbackHost } from "./config.js";
 import type { SwarmStore } from "./db/store.js";

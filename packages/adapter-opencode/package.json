@@ -1,9 +1,9 @@
 {
-  "name": "@opencode-swarm/adapter-opencode",
+  "name": "@vuminkosi/adapter-opencode",
   "version": "0.0.1",
-  "private": true,
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://npm.pkg.github.com",
+    "provenance": true
   },
   "files": ["src"],
   "type": "module",

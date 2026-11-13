@@ -11,9 +11,10 @@
 # asserted by requirement DEVOPS-PUBLISH-01 AC(3); if the registry ever rejects
 # the attestation, remove `--provenance` and re-run — verification still gates.]
 #
-# Scope note: packages are `@opencode-swarm/*`. The npm scope SHOULD match the
-# repository owner for GitHub Packages linking; if the owner differs, rename the
-# scope (and the @opencode-swarm:registry line below) before cutting a release.
+# Scope note: packages are `@vuminkosi/*`, matching the repository owner
+# (Vuminkosi/opencode-agent-swarm) as required for GitHub Packages linking.
+# Owner verified via `git remote -v` on PUBLISH-READY-01; the scope was renamed
+# from `@opencode-swarm/*` and the @vuminkosi:registry line below aligns.
 
 name: publish
 
@@ -104,18 +105,21 @@ jobs:
       # secret stays in the environment and is never written to disk or logs.
       - name: Configure GitHub Packages registry (no secret on disk)
         run: |
-          printf '%s\n' '@opencode-swarm:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$HOME/.npmrc"
+          printf '%s\n' '@vuminkosi:registry=https://npm.pkg.github.com' '//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}' > "$HOME/.npmrc"
 
       # Publishes each workspace package whose package.json is NOT private.
-      # Currently all five are "private": true, so every package is SKIPPED
-      # until a maintainer flips a package to public (see docs/publishing.md).
+      # All seven workspaces are public (private removed on PUBLISH-READY-01),
+      # so each is published; any package re-marked private is SKIPPED with a
+      # logged reason. apps/swarmctl is NOT a workspace and is out of scope
+      # for this task — it stays in the loop for visibility and is skipped
+      # while private=true (see docs/publishing.md).
       # Exit code propagates: any real `npm publish` failure fails the job.
       - name: Publish public packages (private packages skipped)
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.PUBLISH_GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           fail=0
-          for PKG in packages/protocol packages/runtime packages/adapter-opencode packages/plugin apps/swarmctl; do
+          for PKG in packages/protocol packages/runtime packages/verification packages/adapter-opencode packages/plugin packages/board-terminal packages/git-workspaces apps/swarmctl; do
             if [ ! -f "$PKG/package.json" ]; then
               echo "skip $PKG: no package.json"
               continue

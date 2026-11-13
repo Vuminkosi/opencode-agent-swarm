@@ -23,7 +23,7 @@
  * wakes — the dispatcher never touches non-queued rows.
  */
 
-import type { Member, WakeIntent } from "@opencode-swarm/protocol";
+import type { Member, WakeIntent } from "@vuminkosi/protocol";
 import type { SwarmStore } from "../db/store.js";
 import { formatWakeEvent, newCorrelationId, type WakeEventEmitter } from "./wake-events.js";
 

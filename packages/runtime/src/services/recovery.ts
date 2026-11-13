@@ -41,7 +41,7 @@
  */
 
 import type { Database } from "bun:sqlite";
-import type { BoardPost } from "@opencode-swarm/protocol";
+import type { BoardPost } from "@vuminkosi/protocol";
 import { InboxReconciler, type ReconcileReport, type SnapshotProvider } from "./inbox-reconciler.js";
 import type { ReconcileReport as IntegrationReconcileReport } from "./integration.js";
 import { SwarmStore, type OutboxEntry } from "../db/store.js";

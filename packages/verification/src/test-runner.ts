@@ -38,7 +38,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { RecordEvidenceInputSchema, type RecordEvidenceInput } from "@opencode-swarm/protocol";
+import { RecordEvidenceInputSchema, type RecordEvidenceInput } from "@vuminkosi/protocol";
 
 export const DEFAULT_VERIFICATION_TIMEOUT_MS = 120_000 as const;
 /** Default per-stream capture cap: streams past this are truncated with a marker (never OOM). */

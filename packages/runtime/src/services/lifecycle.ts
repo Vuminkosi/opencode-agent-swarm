@@ -21,7 +21,7 @@ import {
   SwarmStatusSchema,
   type Swarm,
   type SwarmStatus,
-} from "@opencode-swarm/protocol";
+} from "@vuminkosi/protocol";
 
 const SWARM_TRANSITIONS: Record<SwarmStatus, readonly SwarmStatus[]> = {
   planning: ["running", "paused", "cancelled"],

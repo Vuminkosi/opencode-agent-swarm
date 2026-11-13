@@ -7,7 +7,7 @@
  * - R6: task acceptance requires >= 1 exit_code === 0 evidence row.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { ProtocolError } from "@opencode-swarm/protocol";
+import { ProtocolError } from "@vuminkosi/protocol";
 import { SwarmStore } from "../store.js";
 
 const stores: SwarmStore[] = [];

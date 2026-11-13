@@ -59,8 +59,8 @@ import {
   type WakeIntent,
   type WakeReason,
   type WakeState,
-} from "@opencode-swarm/protocol";
-import { ProtocolError } from "@opencode-swarm/protocol";
+} from "@vuminkosi/protocol";
+import { ProtocolError } from "@vuminkosi/protocol";
 
 const MIGRATIONS: readonly { version: number; file: string }[] = [
   { version: 1, file: "001_initial.sql" },

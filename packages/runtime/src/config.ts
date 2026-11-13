@@ -13,7 +13,7 @@
  * Evidence: [DESIGN] (spec §§5, 17 M1-02).
  */
 import { z } from "zod";
-import { SCHEMA_VERSION } from "@opencode-swarm/protocol";
+import { SCHEMA_VERSION } from "@vuminkosi/protocol";
 
 export const PROTOCOL_VERSION = 1 as const;
 

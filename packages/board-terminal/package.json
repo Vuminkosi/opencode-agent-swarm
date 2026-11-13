@@ -1,7 +1,11 @@
 {
-  "name": "@opencode-swarm/board-terminal",
+  "name": "@vuminkosi/board-terminal",
   "version": "0.1.0",
-  "private": true,
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "provenance": true
+  },
+  "files": ["src"],
   "type": "module",
   "description": "M6-02 standalone Bun terminal board: chronological public stream, roster, mentions, follow/history/filtering, delivery/wake status, tasks/verifier/monitor/usage — zero inference, daemon-state reconnect.",
   "exports": {

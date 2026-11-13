@@ -17,7 +17,7 @@
  * submits (dispatch belongs to the M2 WakeDispatcher/daemon lane).
  */
 
-import type { BoardPost, PostKind } from "@opencode-swarm/protocol";
+import type { BoardPost, PostKind } from "@vuminkosi/protocol";
 import type { SwarmStore } from "../db/store.js";
 
 export interface PublicPostInput {

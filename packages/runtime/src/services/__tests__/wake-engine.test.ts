@@ -11,7 +11,7 @@ import { describe, test, expect, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ProtocolError } from "@opencode-swarm/protocol";
+import { ProtocolError } from "@vuminkosi/protocol";
 import { SwarmStore } from "../../db/store.js";
 import { WakeQueue } from "../wake-queue.js";
 import { WakeDispatcher, type DispatchHarness } from "../wake-dispatcher.js";

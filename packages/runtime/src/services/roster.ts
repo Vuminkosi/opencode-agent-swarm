@@ -8,7 +8,7 @@
  * leaks internal-only wake payload hashes.
  */
 
-import type { BoardPost, Member, Task, WakeIntent } from "@opencode-swarm/protocol";
+import type { BoardPost, Member, Task, WakeIntent } from "@vuminkosi/protocol";
 import type { OutboxEntry, SwarmStore } from "../db/store.js";
 
 export interface RosterEntry {

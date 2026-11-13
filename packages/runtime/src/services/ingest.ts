@@ -15,7 +15,7 @@
  * uses its own busy-tolerant handle and writes ONLY to the dedupe tables.
  */
 import { Database } from "bun:sqlite";
-import { ProtocolError } from "@opencode-swarm/protocol";
+import { ProtocolError } from "@vuminkosi/protocol";
 
 export interface IngestEventInput {
   readonly source: string;

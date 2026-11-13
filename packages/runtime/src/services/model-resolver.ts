@@ -49,7 +49,7 @@
  * placeholder (the old `{ inherit, lead-model }` placeholder is deleted).
  */
 
-import type { ModelRef } from "@opencode-swarm/protocol";
+import type { ModelRef } from "@vuminkosi/protocol";
 
 /** Where a resolved worker model came from (precedence order). */
 export type ModelSource =

@@ -7,7 +7,7 @@
  * canonical-tree writes.
  */
 import { describe, test, expect } from "bun:test";
-import { ProtocolError } from "@opencode-swarm/protocol";
+import { ProtocolError } from "@vuminkosi/protocol";
 import { SwarmStore } from "../../db/store.js";
 import {
   COORDINATOR_WRITE_DENY_RULES,

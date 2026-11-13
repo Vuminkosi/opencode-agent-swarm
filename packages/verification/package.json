@@ -1,9 +1,9 @@
 {
-  "name": "@opencode-swarm/verification",
+  "name": "@vuminkosi/verification",
   "version": "0.1.0",
-  "private": true,
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://npm.pkg.github.com",
+    "provenance": true
   },
   "files": ["src"],
   "type": "module",
@@ -12,7 +12,7 @@
     ".": "./src/test-runner.ts"
   },
   "dependencies": {
-    "@opencode-swarm/protocol": "workspace:*"
+    "@vuminkosi/protocol": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "22.10.2",
