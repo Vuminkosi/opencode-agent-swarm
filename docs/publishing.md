@@ -105,19 +105,42 @@ npmjs.com if needed). Scope availability was checked unauthenticated via
 publish: if `npm view` returns a version instead of 404, STOP — the scope is
 taken and nothing may publish under it.
 
-### Token setup (one time)
+### Trusted publisher setup (one time per package)
 
-1. Sign in at npmjs.com → Access Tokens → Generate New Token (granular or
-   classic) with **publish permission scoped to `@vuminkosi/*`**
-   (read+write for the scope; no broader permissions).
-2. Add it as a repository Actions secret named **`NPM_TOKEN`**
-   (GitHub → Settings → Secrets and variables → Actions → New repository
-   secret). The workflow reads it only as
-   `NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}`; it is never echoed, never
-   written to disk (the `.npmrc` references `${NODE_AUTH_TOKEN}` literally),
-   and no `set -x` / `env` dumps are allowed in the workflow.
-3. No other secret changes: the GitHub Packages token stays only in
+This lane authenticates with npm **trusted publishing (OIDC)** — the
+publish job's `id-token: write` permission is the sole credential and the
+workflow holds no tokens or Actions secrets. Register this repo + workflow
+as a trusted publisher on **each** package before the first publish:
+
+1. Sign in at npmjs.com → open the package page → **Settings** → **Trusted
+   Publisher** → **Manage Trusted Publishers**.
+2. Add a GitHub Actions trusted publisher with organization/user
+   `vuminkosi`, repository `opencode-agent-swarm`, and workflow file name
+   `publish-npmjs.yml` (no environment restriction needed).
+3. Repeat for every package the loop publishes
+   (`@vuminkosi/protocol`, `@vuminkosi/runtime`, `@vuminkosi/verification`,
+   `@vuminkosi/adapter-opencode`, `@vuminkosi/plugin`,
+   `@vuminkosi/board-terminal`, `@vuminkosi/git-workspaces`). A package
+   without a registered trusted publisher fails at publish time while the
+   others still publish; attach the publisher and re-run.
+4. No repository Actions secret is required for this lane, and none is
+   referenced by the workflow. The GitHub Packages token stays only in
    `publish.yml` and is never used by this lane.
+
+### One-time bootstrap if a package does not exist yet
+
+Trusted publishers can only be attached to an existing package. If a
+package has never been published to npmjs.org:
+
+1. From a maintainer machine, `npm login` to an npm account that owns (or
+   may create) the `@vuminkosi` scope.
+2. `cd` into the package directory and run `npm publish --registry
+   https://registry.npmjs.org` (add `--access public` for the first
+   publish of a scoped package if it should be public).
+3. Attach this repo + workflow as a trusted publisher on the new package
+   page (see above) — all later publishes come from the workflow.
+4. Re-run the `publish-npmjs` workflow (or cut the release again) so the
+   registry copy is produced by CI with provenance.
 
 ### How to trigger
 
@@ -137,5 +160,17 @@ job (frozen install, `tsc --noEmit` x4, scoped `bun test` suite) gates the
    `publishConfig.registry` in manifests; manifests are not edited).
 4. Install from the public registry with no special `.npmrc`:
    `npm view @vuminkosi/protocol version` should now return the version.
+   Consumers need **no `.npmrc` entry** for the default registry — plain
+   `npm install @vuminkosi/<pkg>` resolves via `https://registry.npmjs.org`.
+   Scope-mapping conflict note: if a consumer's global (or project) `.npmrc`
+   maps the whole scope elsewhere (e.g.
+   `@vuminkosi:registry=https://npm.pkg.github.com` left over from the
+   GitHub Packages lane), that line **shadows** npmjs.org for every
+   `@vuminkosi/*` install — remove it or override it with
+   `@vuminkosi:registry=https://registry.npmjs.org` when consuming from
+   npmjs.org.
 5. GitHub Packages publishing is unchanged: `publish.yml` still publishes
    the same package set to `https://npm.pkg.github.com` on its own trigger.
+6. Provenance fallback: if the npmjs.org registry ever rejects the
+   `--provenance` attestation, remove the flag from the publish command and
+   re-run — the verify job still gates every publish.

@@ -6,8 +6,11 @@
 #
 # Mirror of `.github/workflows/publish.yml` (GitHub Packages lane) with two
 # deliberate differences:
-# 1. Auth uses NODE_AUTH_TOKEN=${{ secrets.NPM_TOKEN }} (npmjs.org Access Token
-#    with scoped publish permission, stored as repo Actions secret `NPM_TOKEN`).
+# 1. Auth is npm trusted publishing (OIDC): the publish job's `id-token: write`
+#    permission is the SOLE auth mechanism. npm exchanges the job's OIDC token
+#    with the registry at publish time — no tokens, no stored credentials, no
+#    `.npmrc` `_authToken` line anywhere in this file. Each package must list
+#    this repo + workflow as a trusted publisher (see docs/publishing.md).
 #    The GitHub Packages token stays ONLY in the GitHub Packages workflow — never here.
 # 2. Registry is the npmjs.org default (https://registry.npmjs.org). No scope
 #    mirror line (`@vuminkosi:registry=...`) is written anywhere; the per-package
@@ -15,9 +18,9 @@
 #    `publishConfig.registry` (currently `https://npm.pkg.github.com`) in each
 #    package.json without editing manifests.
 #
-# Secrets: publishes with NODE_AUTH_TOKEN=${{ secrets.NPM_TOKEN }} only.
-# The token is never echoed (no `set -x`, no `env` dumps). See docs/publishing.md.
-# Provenance (Sigstore/OIDC) needs `id-token: write` on the publish job. [DESIGN:
+# Auth: npm trusted publishing (OIDC) only — no stored credentials in this file.
+# Provenance (Sigstore/OIDC) needs `id-token: write` on the publish job, which
+# doubles as the publish credential. [DESIGN:
 # npm provenance attestation against the npmjs.org registry is asserted by
 # requirement PUBLISH-NPMJS-01; if the registry ever rejects the attestation,
 # remove `--provenance` and re-run — verification still gates.]
@@ -109,22 +112,14 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 24
-          # Default npmjs.org registry — NOT a mirror. No scope mapping is set
-          # here or in .npmrc; the publish command's --registry flag below
-          # overrides each package.json publishConfig.registry (GPR).
-          registry-url: https://registry.npmjs.org
+          # No registry-url: that input would write an `_authToken` line into
+          # the npm config. This lane authenticates via OIDC trusted
+          # publishing instead; the publish command's --registry flag below
+          # targets npmjs.org and overrides each package.json
+          # publishConfig.registry (GPR).
 
       - name: Install (frozen lockfile)
         run: bun install --frozen-lockfile
-
-      # Writes $HOME/.npmrc with a literal ${NODE_AUTH_TOKEN} reference so the
-      # secret stays in the environment and is never written to disk or logs.
-      # Intentionally NO `@vuminkosi:registry=...` scope-mirror line: npm
-      # resolves the default registry (https://registry.npmjs.org) plus the
-      # per-command --registry flag below.
-      - name: Configure npmjs.org auth (no secret on disk, no mirror)
-        run: |
-          printf '%s\n' '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}' > "$HOME/.npmrc"
 
       # Publishes each workspace package whose package.json is NOT private.
       # Any package marked private is SKIPPED with a logged reason.
@@ -134,9 +129,9 @@ jobs:
       # publishConfig.registry in package.json manifests (which this lane must
       # NOT edit). Exit code propagates: any real `npm publish` failure fails
       # the job.
+      # Auth is OIDC trusted publishing (id-token: write above); no env block,
+      # no stored credentials, no .npmrc needed.
       - name: Publish public packages (private packages skipped)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           fail=0
           for PKG in packages/protocol packages/runtime packages/verification packages/adapter-opencode packages/plugin packages/board-terminal packages/git-workspaces apps/swarmctl; do
