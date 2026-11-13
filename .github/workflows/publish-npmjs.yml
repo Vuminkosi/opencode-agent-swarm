@@ -15,8 +15,9 @@
 # 2. Registry is the npmjs.org default (https://registry.npmjs.org). No scope
 #    mirror line (`@vuminkosi:registry=...`) is written anywhere; the per-package
 #    `npm publish --registry https://registry.npmjs.org` flag overrides the
-#    `publishConfig.registry` (currently `https://npm.pkg.github.com`) in each
-#    package.json without editing manifests.
+#    `publishConfig.registry` (`https://registry.npmjs.org`) in each
+#    package.json without editing manifests (GPR lane pins its own
+#    --registry at publish.yml:133).
 #
 # Auth: npm trusted publishing (OIDC) only — no stored credentials in this file.
 # Provenance (Sigstore/OIDC) needs `id-token: write` on the publish job, which
