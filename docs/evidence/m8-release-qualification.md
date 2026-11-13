@@ -470,3 +470,13 @@ fresh-install smoke/E2E required by spec §14 M8. [PROBE]
 | Upgrade/rollback path (§10.7) | DOCUMENTED (additive 004, forward-safe; revert/reset to `7d4d79b` + rerun targeted suites) |
 | Toolchain pins (opencode 2.2.7, bun 1.4.4, TS 5.9.2, `@opencode/plugin` 2.2.7, protocolVersion/schemaVersion 1) | PINNED-candidate matrix (§10.6); live version captures NOT VERIFIED |
 | Release / shipped / production | NOT CLAIMED — fix commit is not a release; decision UNDECIDED-PENDING-MASTER (master-owned) |
+
+## 11. M8-S3 follow-up closure at 49035b3 [PROBE]
+> **Document status for this section only: IMPLEMENTED (code-observed at 49035b3) / COMMITTED (49035b3, verified git rev-parse HEAD).**
+> POST-01 PASS-supplied (not a fresh run of this DOC session) / live inference NOT VERIFIED / release UNDECIDED-PENDING-MASTER.**
+> Sections 1-10 above are unchanged; nothing below rewrites them. [DESIGN]
+- **Scope (M8-S3-01):** gh_sk deny in SECRET_PREFIX_PATTERN plus UNC/device-namespace limits doc block (behavior unchanged, fail-closed) plus 5 S3 negative rows (2 fixed by this commit, 3 already-closed rows re-verified). [PROBE]
+- **Review (REVIEW-01):** COMMIT_READY, 0 S0/S1 (supplied review disposition, cited, not a fresh review here). [PROBE]
+- **Commit (COMMIT-01):** 49035b3, 4 files, 86 insertions, 3 deletions (git show --stat 49035b3, inspected). [PROBE]
+- **Post-commit (POST-01):** PASS-supplied: tsc both exit 0; 50 plus 60 plus 13 equals 123 pass, 0 fail (supplied handoff evidence, not re-executed here). [PROBE]
+- **Carry (unchanged):** F-04 402-shape NOT VERIFIED; live inference and live server NOT VERIFIED; release decision master-owned UNDECIDED-PENDING-MASTER. Commit is not a release. [PROBE]
