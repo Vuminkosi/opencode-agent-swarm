@@ -253,6 +253,9 @@ Publishable workspaces (all `public`, `provenance: true`, `files: ["src"]`):
 
 ## 2. For contributors
 
+Read [AGENTS.md](AGENTS.md) for repository boundaries, safe verification choices
+and the distinction between local checks, live agent work and publication.
+
 ### Repo layout (one line each, from the actual tree)
 
 ```text
